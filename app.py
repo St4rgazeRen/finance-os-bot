@@ -180,6 +180,10 @@ def create_asset_card(history):
 # ==========================================
 # 4. Flask Webhook 監聽
 # ==========================================
+# --- 新增這段：健康檢查首頁 ---
+@app.route("/")
+def home():
+    return "Finance Bot is Live! 機器人活著！"
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -217,4 +221,5 @@ def handle_message(event):
     # 其他訊息不回應，避免干擾
 
 if __name__ == "__main__":
+
     app.run()
