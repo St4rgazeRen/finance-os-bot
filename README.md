@@ -10,6 +10,14 @@
 
 ---
 
+## 📜 版本歷程 (Version History)
+
+### `app.py`
+- **v1.0**：核心功能上線。支援「房貸、BTC、總資產」關鍵字，整合 QuickChart 繪製黑底財經圖表，並回傳 LINE Flex Message。
+- **v1.1**：新增健康檢查路由 (`/`)。支援 UptimeRobot 定時監控，防止 Render 免費版進入休眠模式，消除 Cold Start 延遲。
+
+---
+
 ## ✨ 機器人功能 (Bot Features)
 
 當你在 LINE 聊天室輸入以下關鍵字時，機器人會觸發對應動作：
