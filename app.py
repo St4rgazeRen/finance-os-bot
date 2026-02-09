@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import urllib3
+import numpy as np
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -16,13 +17,13 @@ app = Flask(__name__)
 # ==========================================
 # 0. 環境變數與設定
 # ==========================================
-# 注意：部署到 Render 時，這些變數要在 Render 後台設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DB_MORTGAGE = os.getenv("DB_MORTGAGE")
 DB_SNAPSHOT = os.getenv("DB_SNAPSHOT")
+DB_BUDGET = os.getenv("BUDGET_DB_ID")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -38,152 +39,331 @@ LOAN_TOTAL_PRINCIPAL = 5330000
 BTC_GOAL = 1.0
 
 # ==========================================
-# 1. Notion 資料讀取函式 (沿用 v1.0)
+# 1. 資料讀取函式 (含萬能數值提取)
 # ==========================================
+def extract_number(prop):
+    """
+    🔥 萬能數值提取器
+    自動處理 Number, Formula, Rollup (Number/Array)
+    """
+    if not prop: return 0
+    p_type = prop.get("type")
+    
+    if p_type == "number":
+        return prop.get("number", 0) or 0
+    elif p_type == "formula":
+        return prop.get("formula", {}).get("number", 0) or 0
+    elif p_type == "rollup":
+        rollup = prop.get("rollup", {})
+        r_type = rollup.get("type")
+        if r_type == "number":
+            return rollup.get("number", 0) or 0
+        elif r_type == "array":
+            total = 0
+            for item in rollup.get("array", []):
+                if item.get("type") == "number":
+                    total += item.get("number", 0) or 0
+                elif item.get("type") == "formula":
+                    total += item.get("formula", {}).get("number", 0) or 0
+            return total
+    return 0
+
 def get_current_mortgage():
     try:
         res = requests.post(f"https://api.notion.com/v1/databases/{DB_MORTGAGE}/query", headers=NOTION_HEADERS, json={"page_size": 1}, verify=False)
         data = res.json()
         if data["results"]:
-            props = data["results"][0]["properties"]
-            return props.get("剩餘本金", {}).get("number", LOAN_TOTAL_PRINCIPAL)
+            return extract_number(data["results"][0]["properties"].get("剩餘本金", {}))
     except: pass
     return LOAN_TOTAL_PRINCIPAL
 
-def get_asset_history(days=30):
+def get_asset_history(days=120):
     query = {"page_size": days, "sorts": [{"property": "日期", "direction": "descending"}]}
     try:
         res = requests.post(f"https://api.notion.com/v1/databases/{DB_SNAPSHOT}/query", headers=NOTION_HEADERS, json=query, verify=False)
         data = res.json()
         results = data.get("results", [])
         
-        history = {"dates": [], "crypto": [], "us_stock": [], "tw_stock": [], "gold": [], "cash": [], "btc_holdings": []}
+        history = {
+            "dates": [], "crypto": [], "us_stock": [], "tw_stock": [], "gold": [], "cash": [], "btc_holdings": [], "total_assets": []
+        }
         
         for p in reversed(results):
             props = p["properties"]
-            date_str = props.get("日期", {}).get("date", {}).get("start", "")
-            if not date_str: continue
+            d = props.get("日期", {}).get("date", {}).get("start", "")
+            if not d: continue
             
-            d_fmt = datetime.strptime(date_str, "%Y-%m-%d").strftime("%m/%d")
-            history["dates"].append(d_fmt)
-            history["crypto"].append(props.get("Crypto", {}).get("number", 0) or 0)
-            history["us_stock"].append(props.get("美股複委託", {}).get("number", 0) or 0)
-            history["tw_stock"].append(props.get("台股證券戶", {}).get("number", 0) or 0)
-            history["gold"].append(props.get("Gold", {}).get("number", 0) or 0)
-            history["cash"].append(props.get("活存", {}).get("number", 0) or 0)
-            history["btc_holdings"].append(props.get("BTC持有量", {}).get("number", 0) or 0)
+            history["dates"].append(datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d"))
+            
+            def gn(k): return extract_number(props.get(k, {}))
+            history["crypto"].append(gn("Crypto"))
+            history["us_stock"].append(gn("美股複委託"))
+            history["tw_stock"].append(gn("台股證券戶"))
+            history["gold"].append(gn("Gold"))
+            history["cash"].append(gn("活存"))
+            history["btc_holdings"].append(gn("BTC持有量"))
+            history["total_assets"].append(gn("總資產"))
+            
         return history
     except: return None
 
+def get_budget_monthly_6m():
+    """讀取預算資料庫 (最近 6 個月，過濾未來月份)"""
+    query = {"page_size": 100, "sorts": [{"property": "預算類別", "direction": "descending"}]}
+    try:
+        res = requests.post(f"https://api.notion.com/v1/databases/{DB_BUDGET}/query", headers=NOTION_HEADERS, json=query, verify=False)
+        data = res.json()
+        results = data.get("results", [])
+        
+        monthly_data = {}
+        all_cats = set()
+
+        now = datetime.now()
+        current_ym_str = now.strftime("%Y%m")
+        
+        # 計算上個月
+        if now.month == 1:
+            last_month_date = datetime(now.year - 1, 12, 1)
+        else:
+            last_month_date = datetime(now.year, now.month - 1, 1)
+        target_last_m_fmt = last_month_date.strftime("%y-%m")
+
+        for p in results:
+            props = p["properties"]
+            title_list = props.get("預算類別", {}).get("title", [])
+            if not title_list: continue
+            full_title = title_list[0]["plain_text"]
+            
+            # 🔥 萬能提取 + 絕對值
+            spent = abs(extract_number(props.get("實際花費", {})))
+
+            if len(full_title) > 6 and full_title[:6].isdigit():
+                ym_raw = full_title[:6]
+                if ym_raw > current_ym_str: continue # 過濾未來
+
+                cat = full_title[6:]
+                m_fmt = f"{ym_raw[2:4]}-{ym_raw[4:]}"
+                
+                if m_fmt not in monthly_data: monthly_data[m_fmt] = {}
+                monthly_data[m_fmt][cat] = monthly_data[m_fmt].get(cat, 0) + spent
+                all_cats.add(cat)
+
+        sorted_months = sorted(list(monthly_data.keys()))[-6:] 
+        datasets = []
+        colors = ["#ff6384", "#36a2eb", "#cc65fe", "#ffce56", "#4bc0c0", "#9966ff", "#ff9f40", "#c9cbcf", "#7bc043", "#e63946", "#f1faee", "#a8dadc"]
+        
+        top_cat_name = "N/A"
+        top_cat_amount = 0
+        if target_last_m_fmt in monthly_data:
+            max_val = 0
+            for cat, val in monthly_data[target_last_m_fmt].items():
+                if val > max_val:
+                    max_val = val
+                    top_cat_name = cat
+            top_cat_amount = max_val
+
+        for i, cat in enumerate(all_cats):
+            data_points = []
+            for m in sorted_months:
+                data_points.append(int(monthly_data[m].get(cat, 0) / 1000))
+            
+            if sum(data_points) > 0:
+                datasets.append({
+                    "label": cat,
+                    "data": data_points,
+                    "borderColor": colors[i % len(colors)],
+                    "backgroundColor": colors[i % len(colors)],
+                    "fill": False, 
+                    "pointRadius": 3,
+                    "borderWidth": 2
+                })
+        
+        return sorted_months, datasets, top_cat_name, top_cat_amount
+    except: return [], [], "N/A", 0
+
 # ==========================================
-# 2. 圖表生成工具
+# 2. 圖表生成 (POST)
 # ==========================================
-def get_chart_url(chart_config):
-    chart_config["options"]["layout"] = {"padding": {"left": 20, "right": 20, "top": 20, "bottom": 10}}
-    scales = {
-        "xAxes": [{"gridLines": {"color": "#333333", "zeroLineColor": "#555555"}, "ticks": {"fontColor": "#bbbbbb", "fontSize": 10}}],
-        "yAxes": [{"gridLines": {"color": "#333333", "zeroLineColor": "#555555"}, "ticks": {"fontColor": "#bbbbbb", "fontSize": 10}, "stacked": True}]
+def get_chart_url_post(config):
+    # 🔥 關鍵修正：Padding
+    config["options"]["layout"] = {
+        "padding": {
+            "left": 20, 
+            "right": 40, 
+            "top": 20, 
+            "bottom": 50 
+        }
     }
-    chart_config["options"]["scales"] = scales
-    chart_config["options"]["legend"] = {"labels": {"fontColor": "#ffffff", "fontSize": 11}}
+    config["options"]["legend"] = {"labels": {"fontColor": "#fff", "fontSize": 10}}
     
-    payload = {"chart": chart_config, "width": 500, "height": 300, "backgroundColor": "#121212"}
+    if "scales" in config["options"]:
+        for axis in ["xAxes", "yAxes"]:
+            for scale in config["options"]["scales"].get(axis, []):
+                scale["gridLines"] = {"color": "#333", "zeroLineColor": "#555"}
+                scale["ticks"] = scale.get("ticks", {})
+                scale["ticks"]["fontColor"] = "#bbb"
+                scale["ticks"]["fontSize"] = 10
+
+    payload = {"chart": config, "width": 500, "height": 300, "backgroundColor": "#121212"}
     try:
         res = requests.post("https://quickchart.io/chart/create", json=payload, verify=False)
         if res.status_code == 200: return res.json().get('url')
     except: pass
-    return "https://via.placeholder.com/500x300?text=Chart+Error"
+    return "https://via.placeholder.com/500x300?text=Error"
 
-# ==========================================
-# 3. 卡片生成器
-# ==========================================
-def create_mortgage_card(remaining):
-    paid = LOAN_TOTAL_PRINCIPAL - remaining
-    percent = (paid / LOAN_TOTAL_PRINCIPAL) * 100
-    bar_width = f"{min(percent, 100)}%"
-    return {
-        "type": "bubble", "size": "giga",
-        "header": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "paddingAll": "20px",
-            "contents": [
-                {"type": "text", "text": "MORTGAGE PROGRESS", "color": "#27ae60", "size": "xs", "weight": "bold"},
-                {"type": "text", "text": "劍潭房貸還款進度", "weight": "bold", "size": "xl", "color": "#ffffff"}
-            ]
-        },
-        "body": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "paddingAll": "20px",
-            "contents": [
-                {"type": "box", "layout": "horizontal", "contents": [{"type": "text", "text": "剩餘本金", "size": "sm", "color": "#aaaaaa", "flex": 1}, {"type": "text", "text": f"${remaining:,.0f}", "weight": "bold", "color": "#ef5350", "align": "end"}]},
-                {"type": "separator", "margin": "lg", "color": "#333333"},
-                {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": [
-                    {"type": "box", "layout": "baseline", "contents": [{"type": "text", "text": "還款進度", "size": "xs", "color": "#aaaaaa", "flex": 1}, {"type": "text", "text": f"{percent:.2f}%", "size": "xs", "color": "#27ae60", "weight": "bold", "align": "end"}]},
-                    {"type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px", "contents": [{"type": "box", "layout": "vertical", "width": bar_width, "backgroundColor": "#27ae60", "height": "6px", "cornerRadius": "30px", "contents": []}], "contents": []}
-                ]}
-            ]
-        }
-    }
+def gen_monte_carlo(history_totals):
+    if not history_totals or len(history_totals) < 5:
+        cagr, vol = 0.08, 0.15
+        current_assets = history_totals[-1] if history_totals else 1000000
+    else:
+        arr = np.array(history_totals)
+        arr[arr == 0] = 1 
+        daily_returns = np.diff(arr) / arr[:-1]
+        avg_daily = np.mean(daily_returns)
+        cagr = (1 + avg_daily) ** 365 - 1
+        vol = np.std(daily_returns) * np.sqrt(365)
+        cagr = max(min(cagr, 0.30), 0.02)
+        vol = max(min(vol, 0.40), 0.05)
+        current_assets = arr[-1]
 
-def create_btc_card(current_btc):
-    percent = (current_btc / BTC_GOAL) * 100
-    bar_width = f"{min(percent, 100)}%"
-    return {
-        "type": "bubble", "size": "giga",
-        "header": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "paddingAll": "20px",
-            "contents": [
-                {"type": "text", "text": "BITCOIN ROAD TO 1", "color": "#F7931A", "size": "xs", "weight": "bold"},
-                {"type": "text", "text": "比特幣累積計畫", "weight": "bold", "size": "xl", "color": "#ffffff"}
-            ]
-        },
-        "body": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "paddingAll": "20px",
-            "contents": [
-                {"type": "box", "layout": "horizontal", "contents": [{"type": "text", "text": "持有 (BTC)", "size": "sm", "color": "#aaaaaa", "flex": 1}, {"type": "text", "text": f"{current_btc:.8f}", "weight": "bold", "color": "#ffffff", "align": "end", "size": "lg"}]},
-                {"type": "separator", "margin": "lg", "color": "#333333"},
-                {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": [
-                    {"type": "box", "layout": "baseline", "contents": [{"type": "text", "text": "目標進度", "size": "xs", "color": "#aaaaaa", "flex": 1}, {"type": "text", "text": f"{percent:.2f}%", "size": "xs", "color": "#F7931A", "weight": "bold", "align": "end"}]},
-                    {"type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px", "contents": [{"type": "box", "layout": "vertical", "width": bar_width, "backgroundColor": "#F7931A", "height": "6px", "cornerRadius": "30px", "contents": []}], "contents": []}
-                ]}
-            ]
-        }
-    }
-
-def create_asset_card(history):
-    def to_k(data_list): return [round(x / 1000, 1) for x in data_list]
-    datasets = [
-        {"label": "Crypto", "data": to_k(history["crypto"]), "borderColor": "#fdd835", "backgroundColor": "rgba(253, 216, 53, 0.7)", "fill": True, "pointRadius": 0},
-        {"label": "美股", "data": to_k(history["us_stock"]), "borderColor": "#42a5f5", "backgroundColor": "rgba(66, 165, 245, 0.7)", "fill": True, "pointRadius": 0},
-        {"label": "台股", "data": to_k(history["tw_stock"]), "borderColor": "#ff5252", "backgroundColor": "rgba(255, 82, 82, 0.7)", "fill": True, "pointRadius": 0},
-        {"label": "黃金", "data": to_k(history["gold"]), "borderColor": "#ffa726", "backgroundColor": "rgba(255, 167, 38, 0.7)", "fill": True, "pointRadius": 0},
-        {"label": "現金", "data": to_k(history["cash"]), "borderColor": "#66bb6a", "backgroundColor": "rgba(102, 187, 106, 0.7)", "fill": True, "pointRadius": 0}
-    ]
-    chart_config = {"type": "line", "data": {"labels": history["dates"], "datasets": datasets}, "options": {"title": {"display": False}}}
-    url = get_chart_url(chart_config)
-    current_total = (history["crypto"][-1] + history["us_stock"][-1] + history["tw_stock"][-1] + history["gold"][-1] + history["cash"][-1]) if history["dates"] else 0
+    years = 10
+    sims = 500
+    curr_yr = datetime.now().year
+    labels = [str(curr_yr + i) for i in range(1, years + 1)]
     
-    return {
-        "type": "bubble", "size": "giga",
-        "header": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "paddingAll": "20px",
-            "contents": [
-                {"type": "text", "text": "ASSET ALLOCATION", "color": "#42a5f5", "size": "xs", "weight": "bold"},
-                {"type": "text", "text": "總資產堆疊趨勢 (k TWD)", "weight": "bold", "size": "xl", "color": "#ffffff"}
+    results = []
+    for _ in range(sims):
+        p = [current_assets]
+        for _ in range(years):
+            shock = np.random.normal(cagr, vol)
+            p.append(p[-1] * (1 + shock))
+        results.append(p[1:])
+    
+    res = np.array(results)
+    
+    def to_m(arr): return [round(x / 1000000, 1) for x in arr]
+    d90 = to_m(np.percentile(res, 90, axis=0))
+    d50 = to_m(np.percentile(res, 50, axis=0))
+    d10 = to_m(np.percentile(res, 10, axis=0))
+    median_val = int(np.percentile(res, 50, axis=0)[-1])
+
+    config = {
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {"label": "Best", "data": d90, "borderColor": "#00ff00", "fill": False, "pointRadius": 0, "borderWidth": 1},
+                {"label": "Median", "data": d50, "borderColor": "#0099ff", "fill": False, "pointRadius": 0, "borderWidth": 2},
+                {"label": "Worst", "data": d10, "borderColor": "#ff3333", "fill": False, "pointRadius": 0, "borderWidth": 1}
             ]
         },
-        "hero": {"type": "image", "url": url, "size": "full", "aspectRatio": "20:13", "aspectMode": "cover", "action": {"type": "uri", "uri": url}},
+        "options": {
+            "title": {"display": True, "text": f"CAGR: {cagr:.1%} (Unit: M)", "fontColor": "#ddd"},
+            "scales": {"yAxes": [{"ticks": {"beginAtZero": False}}]}
+        }
+    }
+    return get_chart_url_post(config), median_val
+
+def gen_total_asset_url(hist):
+    if not hist["dates"]: return ""
+    sample = max(1, len(hist["dates"]) // 10)
+    dates = hist["dates"][::sample]
+    def get_d(k): return [round(x/1000, 0) for x in hist[k][::sample]]
+
+    datasets = [
+        {"label": "Crypto", "data": get_d("crypto"), "borderColor": "#fdd835", "backgroundColor": "rgba(253,216,53,0.7)", "fill": True, "pointRadius": 0},
+        {"label": "US", "data": get_d("us_stock"), "borderColor": "#42a5f5", "backgroundColor": "rgba(66,165,245,0.7)", "fill": True, "pointRadius": 0},
+        {"label": "TW", "data": get_d("tw_stock"), "borderColor": "#ff5252", "backgroundColor": "rgba(255,82,82,0.7)", "fill": True, "pointRadius": 0},
+        {"label": "Gold", "data": get_d("gold"), "borderColor": "#ffa726", "backgroundColor": "rgba(255,167,38,0.7)", "fill": True, "pointRadius": 0},
+        {"label": "Cash", "data": get_d("cash"), "borderColor": "#66bb6a", "backgroundColor": "rgba(102,187,106,0.7)", "fill": True, "pointRadius": 0}
+    ]
+    
+    config = {
+        "type": "line",
+        "data": {"labels": dates, "datasets": datasets},
+        "options": {
+            "title": {"display": False},
+            "scales": {"yAxes": [{"stacked": True}], "xAxes": [{"offset": True}]},
+            "legend": {"display": False}
+        }
+    }
+    return get_chart_url_post(config)
+
+def gen_budget_chart_url(labels, datasets):
+    config = {
+        "type": "line", 
+        "data": {"labels": labels, "datasets": datasets},
+        "options": {
+            "title": {"display": True, "text": "Spending Trend (Unit: k)", "fontColor": "#ddd"},
+            "scales": {"yAxes": [{"stacked": False}]},
+            "legend": {"position": "bottom", "labels": {"boxWidth": 10}}
+        }
+    }
+    return get_chart_url_post(config)
+
+# ==========================================
+# 3. 卡片生成 (Mega / Giga)
+# ==========================================
+def card_mortgage(rem):
+    """Size: Mega"""
+    paid = LOAN_TOTAL_PRINCIPAL - rem
+    pct = (paid / LOAN_TOTAL_PRINCIPAL) * 100
+    return {
+        "type": "bubble", "size": "mega",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": "MORTGAGE", "color": "#27ae60", "size": "xs", "weight": "bold"}, {"type": "text", "text": "房貸進度", "weight": "bold", "size": "xl", "color": "#ffffff"}]},
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "box", "layout": "horizontal", "contents": [{"type": "text", "text": "剩餘本金", "size": "sm", "color": "#aaaaaa"}, {"type": "text", "text": f"${rem:,.0f}", "weight": "bold", "color": "#ef5350", "align": "end"}]}, {"type": "separator", "margin": "md", "color": "#333333"}, {"type": "box", "layout": "vertical", "margin": "md", "contents": [{"type": "text", "text": f"{pct:.2f}%", "size": "xs", "color": "#27ae60", "align": "end"}, {"type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px", "contents": [{"type": "box", "layout": "vertical", "width": f"{pct}%", "backgroundColor": "#27ae60", "height": "6px", "cornerRadius": "30px", "contents": []}]}]}]}
+    }
+
+def card_btc(curr):
+    """Size: Mega"""
+    pct = (curr / BTC_GOAL) * 100
+    return {
+        "type": "bubble", "size": "mega",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": "BITCOIN", "color": "#F7931A", "size": "xs", "weight": "bold"}, {"type": "text", "text": "BTC 計畫", "weight": "bold", "size": "xl", "color": "#ffffff"}]},
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "box", "layout": "horizontal", "contents": [{"type": "text", "text": "持有", "size": "sm", "color": "#aaaaaa"}, {"type": "text", "text": f"{curr:.4f}", "weight": "bold", "color": "#ffffff", "align": "end"}]}, {"type": "separator", "margin": "md", "color": "#333333"}, {"type": "box", "layout": "vertical", "margin": "md", "contents": [{"type": "text", "text": f"{pct:.2f}%", "size": "xs", "color": "#F7931A", "align": "end"}, {"type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px", "contents": [{"type": "box", "layout": "vertical", "width": f"{pct}%", "backgroundColor": "#F7931A", "height": "6px", "cornerRadius": "30px", "contents": []}]}]}]}
+    }
+
+def card_assets_v1(hist, url_total):
+    """Size: Giga"""
+    curr = hist["total_assets"][-1]
+    last_week = hist["total_assets"][min(7, len(hist["total_assets"])-1)]
+    diff = curr - last_week
+    color = "#27ae60" if diff >= 0 else "#eb3b5a"
+    arrow = "▲" if diff >= 0 else "▼"
+    return {
+        "type": "bubble", "size": "giga",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": "TOTAL NET WORTH", "color": "#27ae60", "size": "xs", "weight": "bold"}, {"type": "text", "text": "總資產趨勢", "weight": "bold", "size": "xl", "color": "#ffffff"}]},
+        "hero": {"type": "image", "url": url_total, "size": "full", "aspectRatio": "20:13", "aspectMode": "cover"},
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": f"${curr:,.0f}", "size": "xxl", "weight": "bold", "color": "#ffffff", "align": "center"}, {"type": "text", "text": f"{arrow} ${abs(diff):,.0f} (7d)", "size": "sm", "color": color, "align": "center", "margin": "sm"}]}
+    }
+
+def card_chart_giga(title, url, val_text, sub_text=""):
+    """Size: Giga"""
+    return {
+        "type": "bubble", "size": "giga",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": sub_text, "color": "#42a5f5", "size": "xs", "weight": "bold"}, {"type": "text", "text": title, "weight": "bold", "size": "xl", "color": "#ffffff"}]},
+        "hero": {"type": "image", "url": url, "size": "full", "aspectRatio": "20:13", "aspectMode": "cover"},
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": val_text, "size": "xxl", "weight": "bold", "color": "#42a5f5", "align": "center"}]}
+    }
+
+def card_spending_giga(title, url, cat_name, cat_amount):
+    """Size: Giga"""
+    return {
+        "type": "bubble", "size": "giga",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": "SPENDING TREND", "color": "#42a5f5", "size": "xs", "weight": "bold"}, {"type": "text", "text": title, "weight": "bold", "size": "xl", "color": "#ffffff"}]},
+        "hero": {"type": "image", "url": url, "size": "full", "aspectRatio": "20:13", "aspectMode": "cover"},
         "body": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
-            "contents": [{"type": "box", "layout": "horizontal", "contents": [{"type": "text", "text": "目前總資產", "size": "sm", "color": "#aaaaaa"}, {"type": "text", "text": f"${current_total:,.0f}", "size": "lg", "color": "#42a5f5", "weight": "bold", "align": "end"}]}]
+            "type": "box", "layout": "horizontal", "backgroundColor": "#1e1e1e", 
+            "contents": [
+                {"type": "text", "text": f"上月最大: {cat_name}", "size": "sm", "color": "#aaaaaa", "flex": 1, "gravity": "center"},
+                {"type": "text", "text": f"${cat_amount:,.0f}", "size": "xl", "weight": "bold", "color": "#ef5350", "align": "end", "flex": 1}
+            ]
         }
     }
 
 # ==========================================
 # 4. Flask Webhook 監聽
 # ==========================================
-# --- 新增這段：健康檢查首頁 ---
-@app.route("/")
-def home():
-    return "Finance Bot is Live! 機器人活著！"
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -196,30 +376,44 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text.strip().upper() # 轉大寫，方便比對
+    msg = event.message.text.strip().upper()
     
-    # --- 關鍵字判斷 ---
-    if msg == "房貸":
-        remaining = get_current_mortgage()
-        card = create_mortgage_card(remaining)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="房貸進度", contents=card))
+    # 只要輸入 "DASHBOARD", "資產", "ALL" 其中一個，就傳送完整報告
+    if msg in ["DASHBOARD", "資產", "ALL", "FINANCE"]:
+        hist = get_asset_history(120)
+        rem = get_current_mortgage()
         
-    elif msg == "BTC":
-        history = get_asset_history(days=1) # 為了拿最新的 BTC，抓 1 天就夠，若要完整一點抓多天也行
-        btc = history["btc_holdings"][0] if history and history["btc_holdings"] else 0
-        card = create_btc_card(btc)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="BTC進度", contents=card))
-        
-    elif msg == "總資產":
-        history = get_asset_history(days=30)
-        if history and history["dates"]:
-            card = create_asset_card(history)
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="資產趨勢", contents=card))
+        # Group 1 (Mega)
+        cards_small = []
+        if rem > 0: cards_small.append(card_mortgage(rem))
+        if hist: cards_small.append(card_btc(hist["btc_holdings"][-1] if hist["btc_holdings"] else 0))
+
+        # Group 2 (Giga)
+        cards_large = []
+        if hist and hist["total_assets"]:
+            url_total = gen_total_asset_url(hist)
+            cards_large.append(card_assets_v1(hist, url_total))
+
+        if hist and hist["total_assets"]:
+            url_mc, med = gen_monte_carlo(hist["total_assets"])
+            cards_large.append(card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}M", "MONTE CARLO"))
+
+        ml, md, top_cat, top_val = get_budget_monthly_6m()
+        if ml:
+            url_budget = gen_budget_chart_url(ml, md)
+            cards_large.append(card_spending_giga("每月消費變化 (6M)", url_budget, top_cat, top_val))
+
+        # 兩段式發送
+        messages = []
+        if cards_small:
+            messages.append({"type": "flex", "altText": "Status Updates", "contents": {"type": "carousel", "contents": cards_small}})
+        if cards_large:
+            messages.append({"type": "flex", "altText": "Financial Charts", "contents": {"type": "carousel", "contents": cards_large}})
+
+        if messages:
+            line_bot_api.reply_message(event.reply_token, messages)
         else:
-            line_bot_api.reply_message(event.reply_token, TextMessage(text="⚠️ 目前無法讀取資產快照，請稍後再試。"))
-            
-    # 其他訊息不回應，避免干擾
+            line_bot_api.reply_message(event.reply_token, TextMessage(text="⚠️ 目前無法取得任何數據，請檢查 Notion 設定。"))
 
 if __name__ == "__main__":
-
     app.run()
