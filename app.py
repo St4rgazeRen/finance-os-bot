@@ -392,7 +392,7 @@ def handle_message(event):
         hist = get_asset_history(120)
         if hist and hist["total_assets"]:
             url_mc, med = gen_monte_carlo(hist["total_assets"])
-            card = card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}M", "MONTE CARLO")
+            card = card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}", "MONTE CARLO")
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="資產預測", contents=card))
     
     # 5. 消費比較
@@ -407,3 +407,4 @@ def handle_message(event):
 
 if __name__ == "__main__":
     app.run()
+
