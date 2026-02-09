@@ -13,114 +13,82 @@
 ## 📜 版本歷程 (Version History)
 
 ### `app.py`
-- **v1.0**：核心功能上線。支援「房貸、BTC、總資產」關鍵字，整合 QuickChart 繪製黑底財經圖表，並回傳 LINE Flex Message。
-- **v1.1**：新增健康檢查路由 (`/`)。支援 UptimeRobot 定時監控，防止 Render 免費版進入休眠模式，消除 Cold Start 延遲。
+- **v1.2 (Current)**：
+    - **五大指令集結**：新增「預測」與「消費比較」功能。
+    - **邏輯修復**：新增萬能數值提取器 (Universal Extractor)，完美支援 Notion Rollup 與 Formula 屬性；增加月份過濾機制，防止讀取到未來日期的空白預算。
+    - **UI 優化**：實作 **「雙層輪播 (Split Carousel)」** 機制，解決 LINE Flex Message 不同尺寸 (Mega/Giga) 無法混用的限制。
+    - **圖表升級**：修正 QuickChart 邊距 (Padding)，確保 X 軸年份與月份不被裁切；優化蒙地卡羅模擬圖表，採用純數字 Y 軸與英文標籤以防亂碼。
+- **v1.1**：新增健康檢查路由 (`/`)，支援 UptimeRobot 監控。
+- **v1.0**：核心功能上線，支援基礎資產查詢。
 
 ---
 
 ## ✨ 機器人功能 (Bot Features)
 
-當你在 LINE 聊天室輸入以下關鍵字時，機器人會觸發對應動作：
+系統支援 **「關鍵字 1 對 1」** 查詢，或輸入 **`Dashboard`** / **`資產`** 一次調閱所有卡片。
 
-| 關鍵字 | 動作 | 資料來源 |
-| :--- | :--- | :--- |
-| **`房貸`** | 查詢房貸資料庫，計算剩餘本金與還款進度百分比，回傳進度條卡片。 | Notion `DB_MORTGAGE` |
-| **`BTC`** | 查詢資產快照，取得最新比特幣持有量，計算距離 1 顆 BTC 的目標進度。 | Notion `DB_SNAPSHOT` |
-| **`總資產`** | 撈取過去 30 天的資產快照，透過 QuickChart 生成「堆疊面積圖 (Stacked Area Chart)」，顯示資產變化趨勢。 | Notion `DB_SNAPSHOT` |
+| 關鍵字 | 說明 | 視覺呈現 | 資料來源 |
+| :--- | :--- | :--- | :--- |
+| **`房貸`** | 查詢劍潭房貸剩餘本金與還款進度百分比。 | **Mega** (中型卡片) | `DB_MORTGAGE` |
+| **`BTC`** | 查詢最新比特幣持有量，顯示距離 1 顆 BTC 的目標進度。 | **Mega** (中型卡片) | `DB_SNAPSHOT` |
+| **`總資產`** | 撈取過去 120 天快照，生成堆疊面積圖，顯示資產結構變化。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
+| **`預測`** | 基於歷史資產數據，透過 **蒙地卡羅 (Monte Carlo)** 模擬未來 10 年資產走勢 (含樂觀/中位/悲觀)。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
+| **`消費比較`** | 顯示近 6 個月的消費折線圖，並自動計算上個月花費最高的類別與金額。 | **Giga** (大型圖表) | `DB_BUDGET` |
 
 ---
 
 ## 🛠️ 技術架構 (Tech Stack)
 
-- **Web Framework**: [Flask](https://flask.palletsprojects.com/) (Python)
-- **WSGI Server**: [Gunicorn](https://gunicorn.org/) (用於生產環境部署)
-- **Visualization**: [QuickChart.io](https://quickchart.io/) (生成靜態圖表圖片)
-- **Messaging**: [LINE Bot SDK](https://github.com/line/line-bot-sdk-python)
-- **Database**: Notion API (作為 Backend Database)
+- **Web Framework**: [Flask](https://flask.palletsprojects.com/)
+- **Server**: [Gunicorn](https://gunicorn.org/)
+- **Data Processing**: `NumPy` (用於蒙地卡羅模擬與數據分析)
+- **Visualization**: [QuickChart.io](https://quickchart.io/) (生成靜態圖表)
+- **Database**: Notion API (Rollup/Formula 屬性深度解析)
 
 ---
 
 ## 🚀 部署教學 (Deployment on Render)
 
-本專案已優化為可直接部署於 **Render.com** (Free Web Service)。
-
 ### 1. 準備檔案
-確保 Repository 包含以下關鍵檔案：
-- `app.py`: 主程式邏輯。
-- `requirements.txt`: 依賴套件清單 (`flask`, `line-bot-sdk`, `gunicorn`, etc.)。
-- `Procfile`: Render 啟動指令 (`web: gunicorn app:app`)。
+確保 Repository 包含：`app.py`, `requirements.txt`, `Procfile`。
 
-### 2. Render 設定
-1. 在 Render 新增 **Web Service**，連結此 GitHub Repo。
-2. **Name**: `finance-os-bot` (或自訂)
-3. **Region**: Singapore (建議，離台灣近)
-4. **Branch**: `main`
-5. **Runtime**: `Python 3`
-6. **Build Command**: `pip install -r requirements.txt`
-7. **Start Command**: `gunicorn app:app`
+### 2. 環境變數設定 (Environment Variables)
+**⚠️ v1.2 更新：必須新增 `BUDGET_DB_ID`**
 
-### 3. 設定環境變數 (Environment Variables)
-在 Render Dashboard 的 **Environment** 分頁，填入以下變數：
+請在 Render Dashboard > Environment 填入：
 
-| Key | Value |
-| :--- | :--- |
-| `LINE_CHANNEL_ACCESS_TOKEN` | 你的 LINE Channel Access Token |
-| `LINE_CHANNEL_SECRET` | 你的 LINE Channel Secret |
-| `NOTION_TOKEN` | Notion Integration Token |
-| `DB_MORTGAGE` | 房貸資料庫 ID |
-| `DB_SNAPSHOT` | 每日資產快照資料庫 ID |
-| `PYTHON_VERSION` | `3.10.0` (建議指定版本) |
+| Key | Value | 說明 |
+| :--- | :--- | :--- |
+| `LINE_CHANNEL_ACCESS_TOKEN` | (你的 Token) | LINE Messaging API |
+| `LINE_CHANNEL_SECRET` | (你的 Secret) | LINE Messaging API |
+| `NOTION_TOKEN` | (你的 Notion Token) | Notion Integration |
+| `DB_MORTGAGE` | (房貸 DB ID) | 房貸管理 |
+| `DB_SNAPSHOT` | (資產快照 DB ID) | 每日資產紀錄 |
+| **`BUDGET_DB_ID`** | **(預算 DB ID)** | **v1.2 新增：預算控管** |
 
-### 4. 設定 LINE Webhook
-1. 等待 Render 部署完成，取得 Service URL (例如 `https://finance-os-bot.onrender.com`)。
-2. 前往 **LINE Developers Console** > Messaging API > Webhook settings。
-3. 填入 Webhook URL：`https://你的Render網址/callback`
-4. 點擊 **Verify** 確認連線成功。
-5. 開啟 **Use webhook**。
+### 3. 設定 LINE Webhook
+Webhook URL：`https://你的Render網址/callback`
 
 ---
 
-## 💻 本地開發 (Local Development)
+## 📝 關鍵邏輯說明
 
-若要在本機測試 (需使用 Ngrok 穿透或僅測試邏輯)：
+### 1. 萬能數值提取 (Universal Number Extractor)
+Notion 的 API 針對 `Rollup` 和 `Formula` 的回傳格式非常複雜。本專案實作了 `extract_number()` 函式，能自動遞迴處理：
+- 純數字 (`number`)
+- 公式計算結果 (`formula.number`)
+- 關聯表匯總 (`rollup.number` 或 `rollup.array` 加總)
+- **自動取絕對值**：針對消費支出負數，自動轉為正數以利圖表繪製。
 
-1. **安裝套件**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. 雙層輪播 (Split Carousel)
+LINE Flex Message 限制同一個 Carousel 內的所有 Bubble Size 必須一致。
+為了達成「房貸/BTC 用小卡(Mega)」、「圖表用大卡(Giga)」的設計，程式會將回應拆分為 **兩個獨立的 Flex Message** 連續發送。
 
-2. **設定環境變數**
-   建立 `.env` 檔案：
-   ```ini
-   LINE_CHANNEL_ACCESS_TOKEN=...
-   LINE_CHANNEL_SECRET=...
-   NOTION_TOKEN=...
-   DB_MORTGAGE=...
-   DB_SNAPSHOT=...
-   ```
-
-3. **啟動伺服器**
-   ```bash
-   python app.py
-   # 或是
-   flask run
-   ```
-   伺服器將啟動於 `http://127.0.0.1:5000`。
-
----
-
-## 📝 檔案結構
-
-```text
-.
-├── app.py              # 核心程式：Flask Server + LINE Bot 邏輯
-├── Procfile            # Render 部署指令
-├── requirements.txt    # 套件依賴清單
-└── README.md           # 專案說明
-```
+### 3. 未來月份過濾
+讀取預算資料時，系統會自動比對當前日期，**排除未來月份** (例如現在 2 月，會自動忽略已建立但空白的 3 月頁面)，確保「上月最大消費」計算正確。
 
 ---
 
 ## ⚠️ 注意事項
-- **Render 免費版限制**：若網站 15 分鐘無人存取，會進入休眠。喚醒時（第一次傳訊息）可能會有 30-50 秒的延遲，此為正常現象。
-- **圖表生成**：依賴 QuickChart 免費 API，若圖表顯示失敗，請檢查網路連線或 QuickChart 服務狀態。
+- **Render 休眠**：免費版 15 分鐘無人使用會休眠，喚醒時第一則訊息可能延遲 30-50 秒。
+- **QuickChart 中文支援**：為避免中文亂碼，圖表標籤 (X/Y軸、Legend) 建議使用英文或純數字 (e.g., "26-02", "Spending Trend")。
