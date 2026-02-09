@@ -7,7 +7,7 @@ from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, FlexSendMessage
+from linebot.models import MessageEvent, TextMessage, FlexSendMessage, TextSendMessage
 
 # 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -42,10 +42,7 @@ BTC_GOAL = 1.0
 # 1. 資料讀取函式 (含萬能數值提取)
 # ==========================================
 def extract_number(prop):
-    """
-    🔥 萬能數值提取器
-    自動處理 Number, Formula, Rollup (Number/Array)
-    """
+    """萬能數值提取器"""
     if not prop: return 0
     p_type = prop.get("type")
     
@@ -121,7 +118,6 @@ def get_budget_monthly_6m():
         now = datetime.now()
         current_ym_str = now.strftime("%Y%m")
         
-        # 計算上個月
         if now.month == 1:
             last_month_date = datetime(now.year - 1, 12, 1)
         else:
@@ -134,12 +130,12 @@ def get_budget_monthly_6m():
             if not title_list: continue
             full_title = title_list[0]["plain_text"]
             
-            # 🔥 萬能提取 + 絕對值
+            # 取絕對值
             spent = abs(extract_number(props.get("實際花費", {})))
 
             if len(full_title) > 6 and full_title[:6].isdigit():
                 ym_raw = full_title[:6]
-                if ym_raw > current_ym_str: continue # 過濾未來
+                if ym_raw > current_ym_str: continue 
 
                 cat = full_title[6:]
                 m_fmt = f"{ym_raw[2:4]}-{ym_raw[4:]}"
@@ -182,18 +178,10 @@ def get_budget_monthly_6m():
     except: return [], [], "N/A", 0
 
 # ==========================================
-# 2. 圖表生成 (POST)
+# 2. 圖表生成 (POST + Padding Fix)
 # ==========================================
 def get_chart_url_post(config):
-    # 🔥 關鍵修正：Padding
-    config["options"]["layout"] = {
-        "padding": {
-            "left": 20, 
-            "right": 40, 
-            "top": 20, 
-            "bottom": 50 
-        }
-    }
+    config["options"]["layout"] = {"padding": {"left": 20, "right": 40, "top": 20, "bottom": 50}}
     config["options"]["legend"] = {"labels": {"fontColor": "#fff", "fontSize": 10}}
     
     if "scales" in config["options"]:
@@ -240,7 +228,6 @@ def gen_monte_carlo(history_totals):
         results.append(p[1:])
     
     res = np.array(results)
-    
     def to_m(arr): return [round(x / 1000000, 1) for x in arr]
     d90 = to_m(np.percentile(res, 90, axis=0))
     d50 = to_m(np.percentile(res, 50, axis=0))
@@ -302,7 +289,7 @@ def gen_budget_chart_url(labels, datasets):
     return get_chart_url_post(config)
 
 # ==========================================
-# 3. 卡片生成 (Mega / Giga)
+# 3. 卡片生成
 # ==========================================
 def card_mortgage(rem):
     """Size: Mega"""
@@ -362,7 +349,7 @@ def card_spending_giga(title, url, cat_name, cat_amount):
     }
 
 # ==========================================
-# 4. Flask Webhook 監聽
+# 4. Webhook 監聽
 # ==========================================
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -376,44 +363,47 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text.strip().upper()
+    msg = event.message.text.strip()
     
-    # 只要輸入 "DASHBOARD", "資產", "ALL" 其中一個，就傳送完整報告
-    if msg in ["DASHBOARD", "資產", "ALL", "FINANCE"]:
-        hist = get_asset_history(120)
+    # 1. 房貸
+    if msg == "房貸":
         rem = get_current_mortgage()
-        
-        # Group 1 (Mega)
-        cards_small = []
-        if rem > 0: cards_small.append(card_mortgage(rem))
-        if hist: cards_small.append(card_btc(hist["btc_holdings"][-1] if hist["btc_holdings"] else 0))
-
-        # Group 2 (Giga)
-        cards_large = []
+        card = card_mortgage(rem)
+        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="房貸進度", contents=card))
+    
+    # 2. BTC
+    elif msg.upper() == "BTC":
+        hist = get_asset_history(1) # 只抓一天夠用
+        if hist:
+            btc = hist["btc_holdings"][0] if hist["btc_holdings"] else 0
+            card = card_btc(btc)
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="BTC進度", contents=card))
+    
+    # 3. 總資產
+    elif msg == "總資產":
+        hist = get_asset_history(120)
         if hist and hist["total_assets"]:
             url_total = gen_total_asset_url(hist)
-            cards_large.append(card_assets_v1(hist, url_total))
-
+            card = card_assets_v1(hist, url_total)
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="總資產", contents=card))
+    
+    # 4. 預測
+    elif msg == "預測":
+        hist = get_asset_history(120)
         if hist and hist["total_assets"]:
             url_mc, med = gen_monte_carlo(hist["total_assets"])
-            cards_large.append(card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}M", "MONTE CARLO"))
-
+            card = card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}M", "MONTE CARLO")
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="資產預測", contents=card))
+    
+    # 5. 消費比較
+    elif msg == "消費比較":
         ml, md, top_cat, top_val = get_budget_monthly_6m()
         if ml:
             url_budget = gen_budget_chart_url(ml, md)
-            cards_large.append(card_spending_giga("每月消費變化 (6M)", url_budget, top_cat, top_val))
-
-        # 兩段式發送
-        messages = []
-        if cards_small:
-            messages.append({"type": "flex", "altText": "Status Updates", "contents": {"type": "carousel", "contents": cards_small}})
-        if cards_large:
-            messages.append({"type": "flex", "altText": "Financial Charts", "contents": {"type": "carousel", "contents": cards_large}})
-
-        if messages:
-            line_bot_api.reply_message(event.reply_token, messages)
+            card = card_spending_giga("每月消費變化 (6M)", url_budget, top_cat, top_val)
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="消費比較", contents=card))
         else:
-            line_bot_api.reply_message(event.reply_token, TextMessage(text="⚠️ 目前無法取得任何數據，請檢查 Notion 設定。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 無法取得消費數據"))
 
 if __name__ == "__main__":
     app.run()
