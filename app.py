@@ -361,6 +361,11 @@ def callback():
         abort(400)
     return 'OK'
 
+# --- 增加這個區塊來處理 Cron-job 的點火請求 ---
+@app.route("/", methods=['GET'])
+def home():
+    return "Bot is awake!", 200
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     msg = event.message.text.strip()
