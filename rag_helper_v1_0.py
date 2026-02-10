@@ -54,7 +54,8 @@ def ask_gemini_json(prompt):
     }
     
     try:
-        r = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
+        # Timeout 設為 60 秒，給 Gemini 多一點點時間，但不要太久
+        r = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
         if r.status_code == 200:
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
@@ -96,9 +97,9 @@ def fetch_notion_data(db_env_key, limit=15):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
-    # 針對流水帳特化：維持 50 筆以保護記憶體 (OOM Fix)
+    # 📉 [關鍵修正] 從 80 降回 50，避免 Render 記憶體不足 (OOM) 導致崩潰
     if db_env_key == "TRANSACTIONS_DB_ID":
-        limit = 150
+        limit = 50
     
     payload = {"page_size": limit}
     if db_env_key in ["TRANSACTIONS_DB_ID", "DIET_DB_ID", "DB_SNAPSHOT", "FLASH_DB_ID"]:
@@ -132,10 +133,11 @@ def determine_intent(user_query):
 
 def generate_rag_response(user_query, domain, raw_data):
     context = json.dumps(raw_data, ensure_ascii=False, indent=2)
-    # 📉 將 Context 限制降回 60000 以節省運算與避免 Timeout
+    
+    # 📉 [關鍵修正] 限制上下文長度，避免記憶體爆掉
     if len(context) > 60000: context = context[:60000] + "...(略)"
 
-    # 🔥 更新 Prompt：嚴格限制字數與條列式回覆
+    # 🔥 [關鍵修正] 更新 Prompt：嚴格限制字數與條列式回覆，加快生成速度避免 Timeout
     prompt = f"""
     你是 AI 財務與生活助理。使用者問："{user_query}"
     資料庫 ({domain}) 紀錄：
@@ -188,7 +190,7 @@ def generate_rag_response(user_query, domain, raw_data):
     }
 
     try:
-        r = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
+        r = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
         if r.status_code == 200:
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
