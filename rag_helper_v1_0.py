@@ -78,7 +78,7 @@ def fetch_notion_data(db_env_key, limit=15):
     if not db_id: return []
     
     if db_env_key == "TRANSACTIONS_DB_ID":
-        limit = 60
+        limit = 200
     
     payload = {"page_size": limit}
     if db_env_key in ["TRANSACTIONS_DB_ID", "DIET_DB_ID", "DB_SNAPSHOT", "FLASH_DB_ID"]:
@@ -239,3 +239,4 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
         line_bot_api.reply_message(reply_token, [flex_msg, text_msg])
     else:
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗。"))
+
