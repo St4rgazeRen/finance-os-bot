@@ -5,3 +5,4 @@ python-dotenv
 gunicorn
 numpy
 urllib3
+google-generativeai
