@@ -99,7 +99,7 @@ def fetch_notion_data(db_env_key, limit=15):
     
     # 針對流水帳特化：撈 60 筆 (Tier 1 速度夠快，可以考慮加到 80-100)
     if db_env_key == "TRANSACTIONS_DB_ID":
-        limit = 80 
+        limit = 50
     
     payload = {"page_size": limit}
     if db_env_key in ["TRANSACTIONS_DB_ID", "DIET_DB_ID", "DB_SNAPSHOT", "FLASH_DB_ID"]:
