@@ -32,19 +32,24 @@ DOMAIN_MAP = {
     ]
 }
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-2.0-flash"
 
 def ask_gemini_json(prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
+    
     try:
         r = requests.post(url, headers=headers, json=data, verify=False)
         if r.status_code == 200:
             raw = r.json()['candidates'][0]['content']['parts'][0]['text']
             clean = raw.replace("```json", "").replace("```", "").strip()
             return json.loads(clean)
-    except: pass
+        else:
+            # 🔥 新增這段：把錯誤印出來，不要默默 return None
+            print(f"❌ Gemini API Error ({r.status_code}): {r.text}")
+    except Exception as e:
+        print(f"❌ Request Failed: {e}")
     return None
 
 def extract_notion_value(prop):
