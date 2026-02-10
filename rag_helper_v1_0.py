@@ -59,7 +59,6 @@ def ask_gemini_json(prompt):
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
                 # 🔥 重點 2：更強的 JSON 清洗 (使用 Regex)
-                # 找尋第一個 { 和最後一個 } 中間的內容
                 match = re.search(r'\{.*\}', raw, re.DOTALL)
                 if match:
                     clean = match.group(0)
@@ -97,7 +96,7 @@ def fetch_notion_data(db_env_key, limit=15):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
-    # 針對流水帳特化：撈 60 筆 (Tier 1 速度夠快，可以考慮加到 80-100)
+    # 針對流水帳特化：維持 50 筆以保護記憶體 (OOM Fix)
     if db_env_key == "TRANSACTIONS_DB_ID":
         limit = 50
     
@@ -133,43 +132,49 @@ def determine_intent(user_query):
 
 def generate_rag_response(user_query, domain, raw_data):
     context = json.dumps(raw_data, ensure_ascii=False, indent=2)
-    # Tier 1 支援更長的 Context，我們可以放寬一點
-    if len(context) > 80000: context = context[:80000] + "...(略)"
+    # 📉 將 Context 限制降回 60000 以節省運算與避免 Timeout
+    if len(context) > 60000: context = context[:60000] + "...(略)"
 
+    # 🔥 更新 Prompt：嚴格限制字數與條列式回覆
     prompt = f"""
     你是 AI 財務與生活助理。使用者問："{user_query}"
     資料庫 ({domain}) 紀錄：
     {context}
     
-    請回傳一個 JSON 物件，包含兩部分：
-    1. "card_data": 用於生成 UI 的精簡數據
-       - title: 標題
-       - main_stat: 核心數據 (如 "$1,200", "2100 kcal")
-       - details: list [{{ "label": "項目", "value": "數值" }}]
+    請回傳 JSON 物件：
+    1. "card_data": 用於生成 UI 的數據
+       - title: 標題 (10字內)
+       - main_stat: 核心數據 (如 "$1,200")
+       - details: list [{{ "label": "項目", "value": "數值" }}] (最多5項)
     
-    2. "detailed_analysis": 針對使用者問題的詳細回答與建議 (字串)。
-       - 請像是專業顧問一樣，針對數據給出具體分析。
-       - 如果資料不足 (例如問上個月但只有本月資料)，請誠實說明「目前資料只包含近期紀錄」，不要瞎掰數字。
-       - 內容要言之有物，可以包含條列式建議。
+    2. "detailed_analysis": 針對問題的重點分析 (字串)。
+       🔥 嚴格限制：
+       - 請列出 **3 點** 關鍵洞察。
+       - 每點 **不超過 50 字**。
+       - 直接講結論，不要廢話。
+       - 格式範例：
+         1. 飲料花費佔比過高(20%)，建議減少手搖飲。
+         2. 餐費控制良好，比上個月節省 $1500。
+         3. 交通費異常增加，主要來自計程車支出。
     
     格式範例:
     {{
         "card_data": {{
-            "title": "飲品消費查詢",
+            "title": "飲品消費",
             "main_stat": "$500",
             "details": [
                 {{ "label": "50嵐", "value": "$120" }},
                 {{ "label": "星巴克", "value": "$380" }}
             ]
         }},
-        "detailed_analysis": "您上個月在飲料上的花費主要集中在...建議可以..."
+        "detailed_analysis": "1. 飲料支出集中在月底...\\n2. 建議..."
     }}
     """
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
-    # 🔥 同樣加上安全設定
+    # 同樣加上安全設定
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -187,7 +192,7 @@ def generate_rag_response(user_query, domain, raw_data):
         if r.status_code == 200:
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
-                # 🔥 Regex 清洗
+                # Regex 清洗
                 match = re.search(r'\{.*\}', raw, re.DOTALL)
                 if match:
                     clean = match.group(0)
