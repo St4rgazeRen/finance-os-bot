@@ -3,7 +3,6 @@ import requests
 import json
 import base64
 from datetime import datetime
-# 🔥 記得引入 FlexSendMessage
 from linebot.models import TextSendMessage, FlexSendMessage
 
 # --- 環境變數 ---
@@ -17,6 +16,14 @@ NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28"
+}
+
+# --- 🔥 使用者個人化目標 (1989年, 77kg) ---
+DAILY_TARGET = {
+    "calories": 2300, # kcal
+    "protein": 100,   # g
+    "carbs": 280,     # g
+    "fat": 75         # g
 }
 
 def get_meal_type():
@@ -35,19 +42,23 @@ def analyze_with_gemini_http(img1_bytes, img2_bytes):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
+    # 🔥 修改 Prompt: 增加營養素欄位
     prompt_text = """
     你是一位專業營養師。圖1是「餐前」、圖2是「餐後」。
     請分析：
     1. 食物名稱(10字內)。
     2. 根據餐後照片，判斷使用者「實際吃了多少比例」(0.0 - 1.0)。空盤代表 1.0。
-    3. 估算「實際攝取」的總熱量(大卡)。
+    3. 估算「實際攝取」的：總熱量(kcal)、蛋白質(g)、碳水化合物(g)、脂肪(g)。
     4. 給予簡短營養建議 (30字內)。
     
-    回傳 JSON:
+    回傳 JSON (純數字，不要單位):
     {
         "food_name": "雞腿便當",
         "percentage": 0.9,
         "calories": 750,
+        "protein": 35,
+        "carbs": 80,
+        "fat": 25,
         "advice": "建議下一餐多吃蔬菜。"
     }
     """
@@ -90,8 +101,8 @@ def save_to_notion(user_id, data):
             {
                 "object": "block", "type": "callout",
                 "callout": {
-                    "rich_text": [{"text": {"content": f"熱量: {data['calories']} kcal | 完食: {int(data['percentage']*100)}%"}}],
-                    "icon": {"emoji": "🔥"}, "color": "orange_background"
+                    "rich_text": [{"text": {"content": f"🔥 {data['calories']} kcal | 🥚 {data['protein']}g | 🍚 {data['carbs']}g | 🥑 {data['fat']}g"}}],
+                    "icon": {"emoji": "📊"}, "color": "gray_background"
                 }
             },
             {
@@ -102,57 +113,63 @@ def save_to_notion(user_id, data):
     }
     requests.post("https://api.notion.com/v1/pages", headers=NOTION_HEADERS, json=payload, verify=False)
 
-# 🔥 新增：製作 Flex Message 卡片
+# --- 🔥 新增小工具：產生進度條 ---
+def make_progress_bar(label, value, target, color):
+    percent = min(int((value / target) * 100), 100)
+    return {
+        "type": "box", "layout": "vertical", "margin": "md",
+        "contents": [
+            {
+                "type": "box", "layout": "horizontal",
+                "contents": [
+                    {"type": "text", "text": label, "size": "xs", "color": "#aaaaaa", "flex": 2},
+                    {"type": "text", "text": f"{value}g ({percent}%)", "size": "xs", "color": "#ffffff", "align": "end", "flex": 3}
+                ]
+            },
+            {
+                "type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px", "margin": "sm",
+                "contents": [
+                    {"type": "box", "layout": "vertical", "width": f"{percent}%", "backgroundColor": color, "height": "6px", "cornerRadius": "30px", "contents": []}
+                ]
+            }
+        ]
+    }
+
 def create_diet_flex(data):
-    pct = int(data['percentage'] * 100)
-    # 根據熱量決定顏色 (大於800紅，小於800綠)
-    color = "#ef5350" if data['calories'] > 800 else "#27ae60"
-    
+    # 計算熱量佔比
+    cal_pct = min(int((data['calories'] / DAILY_TARGET['calories']) * 100), 100)
+    cal_color = "#ef5350" if cal_pct > 40 else "#27ae60" # 如果一餐吃超過日需40%顯示紅字
+
     return {
         "type": "bubble",
         "size": "mega",
         "header": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#1e1e1e",
+            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
             "contents": [
                 {"type": "text", "text": "NUTRITION REPORT", "color": "#FFD700", "size": "xs", "weight": "bold"},
                 {"type": "text", "text": data['food_name'], "weight": "bold", "size": "xl", "color": "#ffffff", "wrap": True}
             ]
         },
         "body": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": "#1e1e1e",
+            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
             "contents": [
-                # 熱量大數字
+                # 1. 總熱量顯示
                 {
-                    "type": "text",
-                    "text": f"{data['calories']} kcal",
-                    "size": "4xl",
-                    "weight": "bold",
-                    "color": color,
-                    "align": "center"
-                },
-                {"type": "text", "text": "ESTIMATED INTAKE", "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "none"},
-                
-                {"type": "separator", "margin": "lg", "color": "#333333"},
-                
-                # 完食率進度條
-                {
-                    "type": "box", "layout": "vertical", "margin": "lg",
-                    "contents": [
-                        {"type": "text", "text": f"完食率 {pct}%", "size": "xs", "color": "#FFD700", "align": "end"},
-                        {
-                            "type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px",
-                            "contents": [
-                                {"type": "box", "layout": "vertical", "width": f"{pct}%", "backgroundColor": "#FFD700", "height": "6px", "cornerRadius": "30px", "contents": []}
-                            ]
-                        }
+                    "type": "box", "layout": "vertical", "contents": [
+                        {"type": "text", "text": f"{data['calories']} kcal", "size": "4xl", "weight": "bold", "color": cal_color, "align": "center"},
+                        {"type": "text", "text": f"佔每日 {cal_pct}% (目標 {DAILY_TARGET['calories']})", "size": "xxs", "color": "#aaaaaa", "align": "center"}
                     ]
                 },
+                {"type": "separator", "margin": "lg", "color": "#333333"},
                 
-                # AI 建議區塊
+                # 2. 三大營養素進度條
+                make_progress_bar("蛋白質", data.get('protein', 0), DAILY_TARGET['protein'], "#4fc3f7"), # 藍色
+                make_progress_bar("碳水", data.get('carbs', 0), DAILY_TARGET['carbs'], "#ffb74d"),   # 橘色
+                make_progress_bar("脂肪", data.get('fat', 0), DAILY_TARGET['fat'], "#e57373"),      # 紅色
+
+                {"type": "separator", "margin": "lg", "color": "#333333"},
+
+                # 3. AI 建議
                 {
                     "type": "box", "layout": "vertical", "margin": "lg", "backgroundColor": "#333333", "cornerRadius": "md", "paddingAll": "md",
                     "contents": [
@@ -174,14 +191,13 @@ def handle_diet_image(user_id, image_content, reply_token, line_bot_api):
         session = user_sessions.pop(user_id)
         before_img = session['before_img']
         
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="🤖 AI 營養師正在分析熱量 (Gemini 2.5)..."))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="🤖 AI 營養師正在詳細分析營養成分..."))
 
         try:
             result = analyze_with_gemini_http(before_img, image_content)
             if result:
                 save_to_notion(user_id, result)
-                
-                # 🔥 改用 Flex Message 推播
+                # 產生新的詳細版 Flex Message
                 flex_content = create_diet_flex(result)
                 line_bot_api.push_message(user_id, FlexSendMessage(alt_text="營養分析報告", contents=flex_content))
             else:
