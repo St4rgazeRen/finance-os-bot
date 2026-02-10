@@ -35,11 +35,11 @@ def get_meal_type():
     else: return "點心"
 
 def analyze_with_gemini_http(img1_bytes, img2_bytes):
-    print("🤖 正在呼叫 Gemini 2.5 Flash (HTTP)...")
+    print("🤖 正在呼叫 Gemini 2.0 Flash (HTTP)...")
     b64_img1 = base64.b64encode(img1_bytes).decode('utf-8')
     b64_img2 = base64.b64encode(img2_bytes).decode('utf-8')
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     # 🔥 修改 Prompt: 增加營養素欄位
@@ -205,3 +205,4 @@ def handle_diet_image(user_id, image_content, reply_token, line_bot_api):
         except Exception as e:
             print(f"❌ 錯誤: {e}")
             line_bot_api.push_message(user_id, TextSendMessage(text="⚠️ 系統錯誤"))
+
