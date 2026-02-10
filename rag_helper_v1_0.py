@@ -68,6 +68,10 @@ def fetch_notion_data(db_env_key, limit=15):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
+    # 🔥 針對流水帳特化：撈更多資料以覆蓋「上個月」
+    if db_env_key == "TRANSACTIONS_DB_ID":
+        limit = 60
+    
     payload = {"page_size": limit}
     if db_env_key in ["TRANSACTIONS_DB_ID", "DIET_DB_ID", "DB_SNAPSHOT", "FLASH_DB_ID"]:
         payload["sorts"] = [{"timestamp": "created_time", "direction": "descending"}]
@@ -98,32 +102,39 @@ def determine_intent(user_query):
     """
     return ask_gemini_json(prompt)
 
-def generate_rag_answer(user_query, domain, raw_data):
+def generate_rag_response(user_query, domain, raw_data):
     # 限制 Context 長度
     context = json.dumps(raw_data, ensure_ascii=False, indent=2)
-    if len(context) > 40000: context = context[:40000] + "...(略)"
+    if len(context) > 60000: context = context[:60000] + "...(略)"
 
-    # 🔥 修改點：所有的 JSON 括號都要變成 {{ }}
+    # 🔥 Prompt 升級：要求同時產生 JSON 卡片數據 AND 詳細文字分析
     prompt = f"""
     你是 AI 財務與生活助理。使用者問："{user_query}"
-    這是從 Notion ({domain}) 撈出的資料：
+    資料庫 ({domain}) 紀錄：
     {context}
     
-    請依領域回傳 JSON 格式以便生成 UI：
-    1. title: 標題 (如 "台股庫存概況" 或 "本週飲食摘要")
-    2. main_stat: 核心數據 (如 "總市值 $1,200,000" 或 "平均熱量 2100kcal")，若無則留空。
-    3. details: 一個 list，包含重點項目的 {{"label": "項目", "value": "數值/內容"}}。 
-    4. summary: 一段簡短的總結分析 (100字內)。
+    請回傳一個 JSON 物件，包含兩部分：
+    1. "card_data": 用於生成 UI 的精簡數據
+       - title: 標題
+       - main_stat: 核心數據 (如 "$1,200", "2100 kcal")
+       - details: list [{{ "label": "項目", "value": "數值" }}]
+    
+    2. "detailed_analysis": 針對使用者問題的詳細回答與建議 (字串)。
+       - 請像是專業顧問一樣，針對數據給出具體分析。
+       - 如果資料不足 (例如問上個月但只有本月資料)，請誠實說明「目前資料只包含近期紀錄」，不要瞎掰數字。
+       - 內容要言之有物，可以包含條列式建議。
     
     格式範例:
     {{
-        "title": "資產查詢結果",
-        "main_stat": "台積電: 5張",
-        "details": [
-            {{"label": "台積電", "value": "獲利 +20%"}},
-            {{"label": "00878", "value": "獲利 +5%"}}
-        ],
-        "summary": "整體投資狀況良好，台積電貢獻最大獲利。"
+        "card_data": {{
+            "title": "飲品消費查詢",
+            "main_stat": "$500",
+            "details": [
+                {{ "label": "50嵐", "value": "$120" }},
+                {{ "label": "星巴克", "value": "$380" }}
+            ]
+        }},
+        "detailed_analysis": "您上個月在飲料上的花費主要集中在...建議可以..."
     }}
     """
     
@@ -140,18 +151,14 @@ def generate_rag_answer(user_query, domain, raw_data):
 
 # --- Flex Message 樣式工廠 ---
 def create_rag_flex(domain, data):
-    # 顏色主題
     colors = {
-        "INVESTMENT": "#ef5350", # 紅 (漲)
-        "FINANCE": "#42a5f5",    # 藍 (理財)
-        "HEALTH": "#66bb6a",     # 綠 (健康)
-        "KNOWLEDGE": "#ffa726"   # 橘 (筆記)
+        "INVESTMENT": "#ef5350", "FINANCE": "#42a5f5", 
+        "HEALTH": "#66bb6a", "KNOWLEDGE": "#ffa726"
     }
     theme_color = colors.get(domain, "#999999")
     
-    # 建構 Details 行
     detail_boxes = []
-    for item in data.get('details', [])[:5]: # 最多顯示 5 行以免太長
+    for item in data.get('details', [])[:5]: 
         detail_boxes.append({
             "type": "box", "layout": "horizontal",
             "contents": [
@@ -173,39 +180,21 @@ def create_rag_flex(domain, data):
         "body": {
             "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
             "contents": [
-                # 核心數據 (如果有)
                 *([{"type": "text", "text": data['main_stat'], "size": "3xl", "weight": "bold", "color": theme_color, "align": "center", "margin": "md"}] if data.get('main_stat') else []),
-                
                 {"type": "separator", "margin": "lg", "color": "#333333"},
-                
-                # 詳細列表
-                {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": detail_boxes},
-                
-                {"type": "separator", "margin": "lg", "color": "#333333"},
-                
-                # AI 總結
-                {
-                    "type": "box", "layout": "vertical", "margin": "lg", "backgroundColor": "#333333", "cornerRadius": "md", "paddingAll": "md",
-                    "contents": [
-                        {"type": "text", "text": "💡 AI 分析：", "size": "xs", "color": "#cccccc", "weight": "bold"},
-                        {"type": "text", "text": data.get('summary', ''), "size": "sm", "color": "#ffffff", "wrap": True, "margin": "sm"}
-                    ]
-                }
+                {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": detail_boxes}
             ]
         }
     }
 
 def handle_rag_query(user_query, reply_token, line_bot_api):
-    # 1. 判斷意圖
     intent = determine_intent(user_query)
     domain = intent.get("domain") if intent else "OTHER"
     
     if domain == "OTHER":
-        # 閒聊模式：不撈 DB，直接回覆 (這裡先簡單處理，可擴充)
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="🤖 請輸入具體的投資、記帳或健康問題，我才能幫你查資料喔！"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="🤖 請輸入投資、記帳或健康相關問題。"))
         return
 
-    # 2. 併發撈取資料
     target_dbs = list(set(DOMAIN_MAP.get(domain, []) + GLOBAL_DBS))
     raw_data = {}
     
@@ -217,14 +206,21 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
             if res: raw_data[db_name] = res
 
     if not raw_data:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ 在 {domain} 領域查無相關資料。"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ 在 {domain} 領域查無資料。"))
         return
 
-    # 3. 生成回答與卡片
-    ai_result = generate_rag_answer(user_query, domain, raw_data)
+    # 生成完整回應 (含卡片與分析)
+    ai_result = generate_rag_response(user_query, domain, raw_data)
     
     if ai_result:
-        flex_content = create_rag_flex(domain, ai_result)
-        line_bot_api.reply_message(reply_token, FlexSendMessage(alt_text=f"{domain} 查詢結果", contents=flex_content))
+        # 1. 製作 Flex 卡片 (只放重點數據)
+        card_data = ai_result.get("card_data", {})
+        flex_msg = FlexSendMessage(alt_text=f"{domain} 查詢結果", contents=create_rag_flex(domain, card_data))
+        
+        # 2. 製作詳細文字訊息
+        text_msg = TextSendMessage(text=ai_result.get("detailed_analysis", "無詳細分析"))
+        
+        # 🔥 重點：一次回傳兩個訊息 (Flex + Text)
+        line_bot_api.reply_message(reply_token, [flex_msg, text_msg])
     else:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗，請稍後再試。"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗。"))
