@@ -7,11 +7,12 @@ from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-# 🔥 記得加 ImageMessage
 from linebot.models import MessageEvent, TextMessage, ImageMessage, FlexSendMessage, TextSendMessage
 
-# 🔥 匯入飲食小幫手模組
+# 匯入飲食小幫手模組
 from diet_helper_v1_0 import handle_diet_image
+# 🔥 [新增] 匯入 RAG 逆向查詢模組
+from rag_helper_v1_0 import handle_rag_query
 
 # 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -43,8 +44,9 @@ LOAN_TOTAL_PRINCIPAL = 5330000
 BTC_GOAL = 1.0
 
 # ==========================================
-# 1. 資料讀取函式 (Finance) - 維持原樣
+# 1. 資料讀取函式 (Finance) - (維持原樣，省略不貼以節省篇幅)
 # ==========================================
+# ... (這裡保留原本的 extract_number, get_current_mortgage, get_asset_history, get_budget_monthly_6m) ...
 def extract_number(prop):
     if not prop: return 0
     p_type = prop.get("type")
@@ -138,9 +140,11 @@ def get_budget_monthly_6m():
         return sorted_months, datasets, top_cat_name, top_cat_amount
     except: return [], [], "N/A", 0
 
+
 # ==========================================
-# 2. 圖表生成 (POST) - 維持原樣
+# 2. 圖表生成 (POST) - (維持原樣)
 # ==========================================
+# ... (這裡保留原本的 get_chart_url_post, gen_monte_carlo, gen_total_asset_url, gen_budget_chart_url) ...
 def get_chart_url_post(config):
     config["options"]["layout"] = {"padding": {"left": 20, "right": 40, "top": 20, "bottom": 50}}
     config["options"]["legend"] = {"labels": {"fontColor": "#fff", "fontSize": 10}}
@@ -208,8 +212,9 @@ def gen_budget_chart_url(labels, datasets):
     return get_chart_url_post(config)
 
 # ==========================================
-# 3. 卡片生成 - 維持原樣
+# 3. 卡片生成 - (維持原樣)
 # ==========================================
+# ... (這裡保留原本的 card_mortgage, card_btc, card_assets_v1, card_chart_giga, card_spending_giga) ...
 def card_mortgage(rem):
     paid = LOAN_TOTAL_PRINCIPAL - rem; pct = (paid / LOAN_TOTAL_PRINCIPAL) * 100
     return {"type": "bubble", "size": "mega", "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": "MORTGAGE", "color": "#27ae60", "size": "xs", "weight": "bold"}, {"type": "text", "text": "房貸進度", "weight": "bold", "size": "xl", "color": "#ffffff"}]}, "body": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "box", "layout": "horizontal", "contents": [{"type": "text", "text": "剩餘本金", "size": "sm", "color": "#aaaaaa"}, {"type": "text", "text": f"${rem:,.0f}", "weight": "bold", "color": "#ef5350", "align": "end"}]}, {"type": "separator", "margin": "md", "color": "#333333"}, {"type": "box", "layout": "vertical", "margin": "md", "contents": [{"type": "text", "text": f"{pct:.2f}%", "size": "xs", "color": "#27ae60", "align": "end"}, {"type": "box", "layout": "vertical", "backgroundColor": "#333333", "height": "6px", "cornerRadius": "30px", "contents": [{"type": "box", "layout": "vertical", "width": f"{pct}%", "backgroundColor": "#27ae60", "height": "6px", "cornerRadius": "30px", "contents": []}]}]}]}}
@@ -228,6 +233,7 @@ def card_chart_giga(title, url, val_text, sub_text=""):
 def card_spending_giga(title, url, cat_name, cat_amount):
     return {"type": "bubble", "size": "giga", "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": "SPENDING TREND", "color": "#42a5f5", "size": "xs", "weight": "bold"}, {"type": "text", "text": title, "weight": "bold", "size": "xl", "color": "#ffffff"}]}, "hero": {"type": "image", "url": url, "size": "full", "aspectRatio": "20:13", "aspectMode": "cover"}, "body": {"type": "box", "layout": "horizontal", "backgroundColor": "#1e1e1e", "contents": [{"type": "text", "text": f"上月最大: {cat_name}", "size": "sm", "color": "#aaaaaa", "flex": 1, "gravity": "center"}, {"type": "text", "text": f"${cat_amount:,.0f}", "size": "xl", "weight": "bold", "color": "#ef5350", "align": "end", "flex": 1}]}}
 
+
 # ==========================================
 # 4. Webhook 監聽
 # ==========================================
@@ -245,38 +251,42 @@ def callback():
 def home():
     return "Bot is awake!", 200
 
-# --- 文字訊息處理 (Finance) ---
+# --- 🔥 文字訊息處理：核心改動處 ---
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text.strip().upper()
+    # 保留原始訊息給 RAG 使用 (因為 RAG 可能需要大小寫敏感的搜尋)
+    msg_original = event.message.text.strip()
+    # 轉大寫用於關鍵字指令判斷
+    msg_upper = msg_original.upper()
     
-    if msg == "房貸":
+    # --- 1. 優先處理關鍵字指令 ---
+    if msg_original == "房貸":
         rem = get_current_mortgage()
         card = card_mortgage(rem)
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="房貸", contents=card))
     
-    elif msg == "BTC":
+    elif msg_upper == "BTC":
         hist = get_asset_history(1) 
         if hist:
             btc = hist["btc_holdings"][0] if hist["btc_holdings"] else 0
             card = card_btc(btc)
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="BTC", contents=card))
             
-    elif msg == "總資產":
+    elif msg_original == "總資產":
         hist = get_asset_history(120)
         if hist and hist["total_assets"]:
             url_total = gen_total_asset_url(hist)
             card = card_assets_v1(hist, url_total)
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="總資產", contents=card))
             
-    elif msg == "預測":
+    elif msg_original == "預測":
         hist = get_asset_history(120)
         if hist and hist["total_assets"]:
             url_mc, med = gen_monte_carlo(hist["total_assets"])
             card = card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}", "MONTE CARLO")
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="預測", contents=card))
             
-    elif msg == "消費比較":
+    elif msg_original == "消費比較":
         ml, md, top_cat, top_val = get_budget_monthly_6m()
         if ml:
             url_budget = gen_budget_chart_url(ml, md)
@@ -284,6 +294,12 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="消費比較", contents=card))
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 無法取得消費數據 (請檢查 BUDGET_DB_ID)"))
+
+    # --- 🔥 2. 沒有命中指令，就丟給 RAG (AI 逆向查詢) ---
+    else:
+        # 設定一個最小長度，避免誤觸 (例如使用者只打了一個標點符號)
+        if len(msg_original) > 1:
+            handle_rag_query(msg_original, event.reply_token, line_bot_api)
 
 # --- 圖片訊息處理 (Diet) ---
 @handler.add(MessageEvent, message=ImageMessage)
@@ -300,5 +316,3 @@ def handle_image_message(event):
 
 if __name__ == "__main__":
     app.run()
-
-
