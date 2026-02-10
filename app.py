@@ -11,7 +11,7 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, ImageMessage, FlexSendMessage, TextSendMessage
 
 # 🔥 匯入飲食小幫手模組
-from diet_helper import handle_diet_image
+from diet_helper_v1.0 import handle_diet_image
 
 # 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -300,3 +300,4 @@ def handle_image_message(event):
 
 if __name__ == "__main__":
     app.run()
+
