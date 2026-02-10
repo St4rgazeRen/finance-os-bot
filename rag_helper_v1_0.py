@@ -3,6 +3,7 @@ import requests
 import json
 import concurrent.futures
 import time
+import re
 from linebot.models import TextSendMessage, FlexSendMessage
 
 # --- 環境變數 ---
@@ -32,24 +33,43 @@ DOMAIN_MAP = {
     ]
 }
 
-# 🔥 改回 Gemini 2.5 Flash (每日 20 次)
+# 🔥 Tier 1 專屬：使用 Gemini 2.5 Flash
 MODEL_NAME = "gemini-2.5-flash"
 
 def ask_gemini_json(prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    # 🔥 重點 1：關閉安全過濾 (避免財務數據被擋)
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+    ]
+    
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "safetySettings": safety_settings
+    }
     
     try:
         r = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
         if r.status_code == 200:
-            raw = r.json()['candidates'][0]['content']['parts'][0]['text']
-            clean = raw.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean)
-        elif r.status_code == 429:
-            # 🔥 攔截 429 錯誤
-            print("❌ Gemini Quota Exceeded (429)")
-            return {"error": "quota_exceeded"}
+            try:
+                raw = r.json()['candidates'][0]['content']['parts'][0]['text']
+                # 🔥 重點 2：更強的 JSON 清洗 (使用 Regex)
+                # 找尋第一個 { 和最後一個 } 中間的內容
+                match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if match:
+                    clean = match.group(0)
+                    return json.loads(clean)
+                else:
+                    print(f"❌ JSON Parse Error (No JSON found): {raw}")
+                    return None
+            except Exception as e:
+                print(f"❌ JSON Parse Error: {e} | Raw: {raw}")
+                return None
         else:
             print(f"❌ Gemini API Error ({r.status_code}): {r.text}")
     except Exception as e:
@@ -77,8 +97,9 @@ def fetch_notion_data(db_env_key, limit=15):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
+    # 針對流水帳特化：撈 60 筆 (Tier 1 速度夠快，可以考慮加到 80-100)
     if db_env_key == "TRANSACTIONS_DB_ID":
-        limit = 200
+        limit = 80 
     
     payload = {"page_size": limit}
     if db_env_key in ["TRANSACTIONS_DB_ID", "DIET_DB_ID", "DB_SNAPSHOT", "FLASH_DB_ID"]:
@@ -111,9 +132,9 @@ def determine_intent(user_query):
     return ask_gemini_json(prompt)
 
 def generate_rag_response(user_query, domain, raw_data):
-    # 限制 Context 長度
     context = json.dumps(raw_data, ensure_ascii=False, indent=2)
-    if len(context) > 60000: context = context[:60000] + "...(略)"
+    # Tier 1 支援更長的 Context，我們可以放寬一點
+    if len(context) > 80000: context = context[:80000] + "...(略)"
 
     prompt = f"""
     你是 AI 財務與生活助理。使用者問："{user_query}"
@@ -147,16 +168,34 @@ def generate_rag_response(user_query, domain, raw_data):
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    # 🔥 同樣加上安全設定
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+    ]
+
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "safetySettings": safety_settings
+    }
+
     try:
         r = requests.post(url, headers=headers, json=data, verify=False, timeout=30)
         if r.status_code == 200:
-            raw = r.json()['candidates'][0]['content']['parts'][0]['text']
-            clean = raw.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean)
-        elif r.status_code == 429:
-            # 🔥 攔截 429 錯誤
-            return {"error": "quota_exceeded"}
+            try:
+                raw = r.json()['candidates'][0]['content']['parts'][0]['text']
+                # 🔥 Regex 清洗
+                match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if match:
+                    clean = match.group(0)
+                    return json.loads(clean)
+                else:
+                     print(f"❌ JSON Parse Error: {raw}")
+            except Exception as e:
+                print(f"❌ JSON Parse Error: {e}")
     except: return None
     return None
 
@@ -199,12 +238,6 @@ def create_rag_flex(domain, data):
 
 def handle_rag_query(user_query, reply_token, line_bot_api):
     intent = determine_intent(user_query)
-    
-    # 🔥 1. 檢查是否一開始就額度耗盡 (意圖判斷失敗)
-    if intent and intent.get("error") == "quota_exceeded":
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="💸 今日 TOKEN 已用罄 QQ\nGemini 2.5 Flash 每日限額 20 次，明天再來吧！"))
-        return
-
     domain = intent.get("domain") if intent else "OTHER"
     
     if domain == "OTHER":
@@ -227,16 +260,11 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
 
     ai_result = generate_rag_response(user_query, domain, raw_data)
     
-    # 🔥 2. 檢查生成回答時是否額度耗盡
-    if ai_result and ai_result.get("error") == "quota_exceeded":
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="💸 今日 TOKEN 已用罄 QQ\n差一點就算出來了...明天再試！"))
-        return
-
     if ai_result:
         card_data = ai_result.get("card_data", {})
         flex_msg = FlexSendMessage(alt_text=f"{domain} 查詢結果", contents=create_rag_flex(domain, card_data))
         text_msg = TextSendMessage(text=ai_result.get("detailed_analysis", "無詳細分析"))
         line_bot_api.reply_message(reply_token, [flex_msg, text_msg])
     else:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗。"))
-
+        # 如果還是失敗，至少我們現在會在 Render Logs 看到原因
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗 (請檢查 Render Logs)。"))
