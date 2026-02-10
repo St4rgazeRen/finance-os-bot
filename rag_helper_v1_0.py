@@ -98,7 +98,7 @@ def fetch_notion_data(db_env_key, limit=15):
     
     # 針對流水帳特化：維持 50 筆以保護記憶體 (OOM Fix)
     if db_env_key == "TRANSACTIONS_DB_ID":
-        limit = 300
+        limit = 200
     
     payload = {"page_size": limit}
     if db_env_key in ["TRANSACTIONS_DB_ID", "DIET_DB_ID", "DB_SNAPSHOT", "FLASH_DB_ID"]:
