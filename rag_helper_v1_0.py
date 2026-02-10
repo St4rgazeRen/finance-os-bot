@@ -103,6 +103,7 @@ def generate_rag_answer(user_query, domain, raw_data):
     context = json.dumps(raw_data, ensure_ascii=False, indent=2)
     if len(context) > 40000: context = context[:40000] + "...(略)"
 
+    # 🔥 修改點：所有的 JSON 括號都要變成 {{ }}
     prompt = f"""
     你是 AI 財務與生活助理。使用者問："{user_query}"
     這是從 Notion ({domain}) 撈出的資料：
@@ -111,7 +112,7 @@ def generate_rag_answer(user_query, domain, raw_data):
     請依領域回傳 JSON 格式以便生成 UI：
     1. title: 標題 (如 "台股庫存概況" 或 "本週飲食摘要")
     2. main_stat: 核心數據 (如 "總市值 $1,200,000" 或 "平均熱量 2100kcal")，若無則留空。
-    3. details: 一個 list，包含重點項目的 {"label": "項目", "value": "數值/內容"}。
+    3. details: 一個 list，包含重點項目的 {{"label": "項目", "value": "數值/內容"}}。 
     4. summary: 一段簡短的總結分析 (100字內)。
     
     格式範例:
