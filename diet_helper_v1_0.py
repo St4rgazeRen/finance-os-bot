@@ -35,14 +35,15 @@ def get_meal_type():
     else: return "點心"
 
 def analyze_with_gemini_http(img1_bytes, img2_bytes):
-    print("🤖 正在呼叫 Gemini 2.0 Flash (HTTP)...")
+    print("🤖 正在呼叫 Gemini 2.5 Flash (HTTP)...")
     b64_img1 = base64.b64encode(img1_bytes).decode('utf-8')
     b64_img2 = base64.b64encode(img2_bytes).decode('utf-8')
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
+    # 🔥 確認使用 gemini-2.5-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
-    # 🔥 修改 Prompt: 增加營養素欄位
+    # 🔥 Modify Prompt: 增加營養素欄位
     prompt_text = """
     你是一位專業營養師。圖1是「餐前」、圖2是「餐後」。
     請分析：
@@ -75,11 +76,20 @@ def analyze_with_gemini_http(img1_bytes, img2_bytes):
 
     try:
         response = requests.post(url, headers=headers, json=data, verify=False)
-        if response.status_code != 200: return None
-        result = response.json()
-        raw_text = result['candidates'][0]['content']['parts'][0]['text']
-        clean_json = raw_text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_json)
+        
+        if response.status_code == 200:
+            result = response.json()
+            raw_text = result['candidates'][0]['content']['parts'][0]['text']
+            clean_json = raw_text.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean_json)
+        elif response.status_code == 429:
+            # 🔥 攔截 429 額度用罄錯誤
+            print("❌ Diet Helper Quota Exceeded (429)")
+            return {"error": "quota_exceeded"}
+        else:
+            print(f"❌ Gemini API Error ({response.status_code}): {response.text}")
+            return None
+
     except Exception as e:
         print(f"❌ Error: {e}")
         return None
@@ -195,6 +205,12 @@ def handle_diet_image(user_id, image_content, reply_token, line_bot_api):
 
         try:
             result = analyze_with_gemini_http(before_img, image_content)
+            
+            # 🔥 檢查是否爆額度
+            if result and result.get("error") == "quota_exceeded":
+                line_bot_api.push_message(user_id, TextSendMessage(text="💸 今日 TOKEN 已用罄 QQ\nGemini 2.5 Flash 每日限額 20 次，明天請早！"))
+                return
+
             if result:
                 save_to_notion(user_id, result)
                 # 產生新的詳細版 Flex Message
@@ -205,4 +221,3 @@ def handle_diet_image(user_id, image_content, reply_token, line_bot_api):
         except Exception as e:
             print(f"❌ 錯誤: {e}")
             line_bot_api.push_message(user_id, TextSendMessage(text="⚠️ 系統錯誤"))
-
