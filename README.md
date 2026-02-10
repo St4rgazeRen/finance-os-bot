@@ -7,40 +7,44 @@
 ![Gemini](https://img.shields.io/badge/Google%20AI-Gemini%202.5-8E75B2?style=flat&logo=googlebard&logoColor=white)
 
 這是 **Finance OS** 的即時互動核心。
-本專案是一個 **Flask Web Server**，部署於 **Render** 雲端平台。它負責 24 小時監聽 LINE 的 Webhook 事件，不僅能從 Notion 資料庫撈取財務數據，現在更整合了 **Google Gemini AI**，提供即時的飲食熱量分析與營養建議。
+本專案是一個 **Flask Web Server**，部署於 **Render** 雲端平台。它負責 24 小時監聽 LINE 的 Webhook 事件。
+除了基礎的記帳與資產查詢，**v3.0** 引入了強大的 **RAG (檢索增強生成)** 系統，整合 **15+ 個 Notion 資料庫**，讓機器人化身為全能的財務與生活助理，能聽懂自然語言並給予專業分析。
 
 ---
 
 ## 📜 版本歷程 (Version History)
 
 ### `app.py`
-- **v2.1 (Latest)**：
-    - **AI 營養師上線**：整合 **Google Gemini 2.5 Flash** 模型，實現「看圖算熱量」。
-    - **雙圖比對邏輯**：支援「餐前」與「餐後」照片比對，自動計算完食率 (Consumption Rate)。
-    - **營養素追蹤**：自動分析蛋白質、碳水、脂肪，並在 Flex Message 顯示每日攝取目標進度條。
-    - **Notion 深度整合**：將分析結果寫入 Diet Log 資料庫，並將詳細建議寫入頁面內文 (Page Content)。
+- **v3.0 (Major Update)**：
+    - **RAG 逆向查詢大腦**：不再只能看圖，現在能「讀取」Notion 資料庫。支援投資、財務、健康、知識四大領域的自然語言問答（例如：「上個月飲料花多少？」、「台積電現在庫存？」）。
+    - **極速並行架構 (Concurrent Fetching)**：導入 `ThreadPoolExecutor` 多執行緒技術，同時撈取多個資料庫，查詢速度提升 500%。
+    - **混合式 UI 回覆**：首創「Flex Message 儀表板 + Text 詳細分析」混合回覆模式，解決單一卡片資訊量不足的問題。
+    - **額度熔斷機制 (Quota Protection)**：自動偵測 Gemini API `429` 錯誤，當額度用罄時優雅降級提醒，防止系統崩潰。
+- **v2.1**：
+    - **AI 營養師**：整合 Gemini 2.5 Flash，實現「看圖算熱量」。
+    - **雙圖比對**：支援餐前/餐後照片比對，計算完食率。
+    - **營養素追蹤**：自動寫入 Diet Log 並視覺化每日攝取進度。
 - **v1.2**：
-    - **五大指令集結**：新增「預測」與「消費比較」功能。
-    - **邏輯修復**：新增萬能數值提取器，完美支援 Notion Rollup 與 Formula 屬性。
-    - **UI 優化**：實作 **「雙層輪播 (Split Carousel)」** 機制。
-    - **圖表升級**：修正 QuickChart 邊距與中文亂碼問題。
-- **v1.1**：新增健康檢查路由 (`/`)，支援 UptimeRobot 監控。
+    - **五大指令集結**：新增「預測」與「消費比較」。
+    - **萬能數值提取器**：完美支援 Notion Rollup 與 Formula。
+    - **UI 優化**：實作雙層輪播 (Split Carousel)。
 - **v1.0**：核心功能上線，支援基礎資產查詢。
 
 ---
 
 ## ✨ 機器人功能 (Bot Features)
 
-系統支援 **「關鍵字查詢」** 與 **「圖片分析」** 雙模式。
+系統支援 **「關鍵字指令」**、**「圖片分析」** 與 **「自然語言問答」** 三種模式。
 
-| 關鍵字 / 動作 | 說明 | 視覺呈現 | 資料來源 |
-| :--- | :--- | :--- | :--- |
-| **`房貸`** | 查詢劍潭房貸剩餘本金與還款進度百分比。 | **Mega** (中型卡片) | `DB_MORTGAGE` |
-| **`BTC`** | 查詢最新比特幣持有量，顯示距離 1 顆 BTC 的目標進度。 | **Mega** (中型卡片) | `DB_SNAPSHOT` |
-| **`總資產`** | 撈取過去 120 天快照，生成堆疊面積圖，顯示資產結構變化。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
-| **`預測`** | 基於歷史資產數據，透過 **蒙地卡羅 (Monte Carlo)** 模擬未來 10 年資產走勢。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
-| **`消費比較`** | 顯示近 6 個月的消費折線圖，並自動計算上個月花費最高的類別與金額。 | **Giga** (大型圖表) | `DB_BUDGET` |
-| **`(傳送圖片)`** | **v2.1 新增**：上傳餐前/餐後照片，AI 自動辨識食物、計算熱量與三大營養素，並給予建議。 | **Mega** (營養分析卡) | `DIET_DB_ID` (寫入) |
+| 模式 | 關鍵字 / 動作 | 說明 | 視覺呈現 | 資料來源 |
+| :--- | :--- | :--- | :--- | :--- |
+| **指令** | **`房貸`** | 查詢房貸剩餘本金與進度。 | **Mega** (中型卡片) | `DB_MORTGAGE` |
+| **指令** | **`BTC`** | 查詢比特幣持有量與目標進度。 | **Mega** (中型卡片) | `DB_SNAPSHOT` |
+| **指令** | **`總資產`** | 生成過去 120 天資產堆疊圖。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
+| **指令** | **`預測`** | 蒙地卡羅模擬未來 10 年資產。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
+| **指令** | **`消費比較`** | 近 6 個月消費折線圖與最大開銷。 | **Giga** (大型圖表) | `DB_BUDGET` |
+| **視覺** | **`(傳送食物照)`** | AI 自動辨識食物、計算熱量與營養素。 | **Mega** (營養分析卡) | `DIET_DB_ID` |
+| **RAG** | **`(自然語言提問)`** | 例：「上個月花多少？」、「台股庫存？」、「最近有吃太油嗎？」 | **Mega** (數據卡) + **Text** (AI分析) | **全資料庫聯網** |
 
 ---
 
@@ -48,58 +52,85 @@
 
 - **Web Framework**: [Flask](https://flask.palletsprojects.com/)
 - **Server**: [Gunicorn](https://gunicorn.org/)
-- **AI Model**: **Google Gemini 2.5 Flash** (via HTTP Requests)
-- **Data Processing**: `NumPy` (模擬預測), `Base64` (影像處理)
-- **Visualization**: [QuickChart.io](https://quickchart.io/) (生成靜態圖表)
-- **Database**: Notion API (Rollup/Formula/Page Content 深度操作)
+- **AI Core**: **Google Gemini 2.5 Flash** (主力)
+- **RAG Engine**: 
+    - **Router**: 意圖識別 (Intent Recognition)
+    - **Retriever**: `concurrent.futures` (並行撈取 Notion API)
+    - **Generator**: 混合式回應生成 (JSON + Natural Language)
+- **Database**: Notion API (深度整合 15+ 資料庫)
 
 ---
 
 ## 🚀 部署教學 (Deployment on Render)
 
 ### 1. 準備檔案
-確保 Repository 包含：`app.py`, `diet_helper_v1_0.py`, `requirements.txt`, `Procfile`。
+確保 Repository 包含：
+- `app.py` (主程式)
+- `diet_helper_v1_0.py` (AI 營養師)
+- `rag_helper_v1_0.py` (RAG 逆向查詢引擎)
+- `requirements.txt`
+- `Procfile`
 
 ### 2. 環境變數設定 (Environment Variables)
-**⚠️ v2.1 更新：必須新增 Google API Key 與 Diet DB ID**
+**⚠️ v3.0 重大更新：必須補齊 RAG 所需的所有資料庫 ID**
 
 請在 Render Dashboard > Environment 填入：
 
-| Key | Value | 說明 |
-| :--- | :--- | :--- |
-| `LINE_CHANNEL_ACCESS_TOKEN` | (你的 Token) | LINE Messaging API |
-| `LINE_CHANNEL_SECRET` | (你的 Secret) | LINE Messaging API |
-| `NOTION_TOKEN` | (你的 Notion Token) | Notion Integration |
-| `DB_MORTGAGE` | (房貸 DB ID) | 房貸管理 |
-| `DB_SNAPSHOT` | (資產快照 DB ID) | 每日資產紀錄 |
-| `BUDGET_DB_ID` | (預算 DB ID) | 預算控管 |
-| **`GOOGLE_API_KEY`** | **(Gemini API Key)** | **v2.1 新增：AI 影像辨識** |
-| **`DIET_DB_ID`** | **(飲食紀錄 DB ID)** | **v2.1 新增：飲食資料庫** |
+**基礎設定**
+- `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET`
+- `NOTION_TOKEN` / `GOOGLE_API_KEY`
+
+**財務資料庫 (Finance)**
+- `DB_MORTGAGE` (房貸)
+- `DB_SNAPSHOT` (資產快照)
+- `BUDGET_DB_ID` (預算)
+- `TRANSACTIONS_DB_ID` (流水帳 - 核心)
+- `INCOME_DB_ID` (收入)
+- `DB_ACCOUNT` (帳戶總覽)
+
+**投資資料庫 (Investment)**
+- `DB_TW_STOCK` (台股)
+- `DB_US_STOCK` (美股)
+- `DB_CRYPTO` (加密貨幣)
+- `DB_GOLD` (黃金)
+- `PAY_LOSS_DB_ID` (已實現損益)
+
+**生活與知識 (Life & Knowledge)**
+- `DIET_DB_ID` (飲食紀錄)
+- `FLASH_DB_ID` (閃電筆記)
+- `LITERATURE_DB_ID` (文獻筆記)
+- `PERMAMENT_DB_ID` (永久筆記)
 
 ### 3. 設定 LINE Webhook
 Webhook URL：`https://你的Render網址/callback`
 
 ---
 
-## 📝 關鍵邏輯說明
+## 📝 關鍵邏輯說明 (v3.0 Highlight)
 
-### 1. 萬能數值提取 (Universal Number Extractor)
-Notion 的 API 針對 `Rollup` 和 `Formula` 的回傳格式非常複雜。本專案實作了 `extract_number()` 函式，能自動遞迴處理各種類型並自動取絕對值。
+### 1. RAG 動態路由 (Intent Router)
+當使用者輸入非指令文字時，系統會先透過 Gemini 判斷意圖：
+- **INVESTMENT**: 鎖定股票、幣、資產 DB。
+- **FINANCE**: 鎖定記帳、預算、房貸 DB。
+- **HEALTH**: 鎖定飲食 DB。
+- **KNOWLEDGE**: 全域搜尋筆記 DB。
+系統只會開啟相關的資料庫進行搜尋，節省資源並提高準確度。
 
-### 2. 雙層輪播 (Split Carousel)
-為解決 LINE Flex Message 限制同一個 Carousel 內 Bubble Size 必須一致的問題，程式會將回應拆分為兩個獨立的 Flex Message 連續發送。
+### 2. 極速並行撈取 (Concurrent Fetching)
+為了處理跨資料庫查詢（例如同時查台股+美股+匯率），程式使用了 Python 的 `ThreadPoolExecutor`。
+這讓機器人能**同時**發送多個 Notion API 請求，將原本需要 10-15 秒的查詢時間壓縮至 **2-3 秒**。
 
-### 3. 未來月份過濾
-讀取預算資料時，系統會自動比對當前日期，排除未來月份的空白資料。
+### 3. 混合式 UI 回覆 (Hybrid Response)
+Flex Message 雖然美觀但有長度限制。v3.0 採用混合策略：
+- **Flex Message**: 顯示 `title`, `main_stat` (總金額/總熱量), `details` (前 5 大項目)。根據領域自動切換主題色（紅/藍/綠/橘）。
+- **Text Message**: 緊隨其後發送 AI 的詳細分析建議，保留了 LLM 的深度推理價值。
 
-### 4. AI 視覺分析與狀態機 (v2.1 New)
-- **HTTP 請求繞過 SSL**：為解決 Render/Local 環境的 gRPC 連線問題，改用原生 `requests` 呼叫 Gemini API。
-- **狀態機 (State Machine)**：系統在記憶體中維護使用者狀態 (`user_sessions`)，自動判斷傳來的圖片是「餐前 (Before)」還是「餐後 (After)」。
-- **Notion 寫入策略**：因 Notion API 不支援直接上傳圖片檔，系統改將 AI 分析數據寫入 Properties，並將詳細文字建議與數據寫入 **Page Content (Block)**，實現無圖床的資料保存。
+### 4. 額度熔斷保護
+針對 Gemini API 的 Rate Limit (`429 Quota Exceeded`)，系統在 `ask_gemini` 與 `analyze_image` 層級都加入了攔截器。一旦偵測到額度用罄，會即時回傳友善提示（「💸 今日 TOKEN 已用罄」），確保機器人不會因報錯而停止運作。
 
 ---
 
 ## ⚠️ 注意事項
-- **Render 休眠**：免費版 15 分鐘無人使用會休眠，喚醒時第一則訊息可能延遲 30-50 秒。
-- **Gemini Quota**：免費版 API 有速率限制，若頻繁傳圖可能會遇到 `429 Too Many Requests`。
-- **QuickChart 中文支援**：圖表標籤建議使用英文或純數字以防亂碼。
+- **Render 休眠**：免費版 15 分鐘無人使用會休眠，喚醒時第一則訊息可能延遲。
+- **Gemini Quota**：Gemini 2.5 Flash 每日約 20 次限制，若用量大建議申請多組 API Key 或切換至 Lite 模型。
+- **Notion 權限**：新增資料庫 ID 後，務必記得在 Notion 頁面將該資料庫 **Share** 給 Integration Robot。
