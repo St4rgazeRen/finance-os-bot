@@ -14,14 +14,21 @@
 
 ## 📜 版本歷程 (Version History)
 
-### `app.py`
+### `app.py` (Main Controller)
 - **v3.0 (Major Update)**：
-    - **RAG 逆向查詢大腦**：不再只能看圖，現在能「讀取」Notion 資料庫。支援投資、財務、健康、知識四大領域的自然語言問答（例如：「上個月飲料花多少？」、「台積電現在庫存？」）。
+    - **RAG 逆向查詢大腦**：不再只能看圖，現在能「讀取」Notion 資料庫。支援投資、財務、健康、知識四大領域的自然語言問答。
     - **極速並行架構 (Concurrent Fetching)**：導入 `ThreadPoolExecutor` 多執行緒技術，同時撈取多個資料庫，查詢速度提升 500%。
-    - **混合式 UI 回覆**：首創「Flex Message 儀表板 + Text 詳細分析」混合回覆模式，解決單一卡片資訊量不足的問題。
     - **額度熔斷機制 (Quota Protection)**：自動偵測 Gemini API `429` 錯誤，當額度用罄時優雅降級提醒，防止系統崩潰。
 
-### `diet_helper.py`
+### `rag_helper.py` (RAG Engine)
+- **v1.1 (Update)**：
+    - **雙重 Flex Message (Double Flex)**：將原本的「文字分析」全面升級為第二張 Flex Card，提供一致且美觀的閱讀體驗。
+    - **智能日期過濾 (Smart Date Filter)**：先進行意圖偵測鎖定日期範圍，並將 Notion 查詢上限提升至 **200 筆**，大幅提升跨月比較分析的精準度與效能。
+    - **深層內文讀取 (Deep Content Fetching)**：針對知識庫 (Knowledge) 領域，自動讀取頁面內的文字區塊 (Blocks)，不再僅限於標題搜尋。
+    - **UI 自適應優化**：修復標題被截斷問題 (Wrap Text) 與大數字顯示 (Shrink-to-Fit)。
+    - **效能保護**：實作 Context 截斷機制 (60,000 字元) 與 JSON Payload 瘦身，防止 Render 記憶體溢出。
+
+### `diet_helper.py` (AI Nutritionist)
 - **v1.1 (Update)**：
     - **時區校正 (Timezone Fix)**：全面採用台灣時間 (UTC+8)，解決跨日與餐別判斷錯誤。
     - **Flex Message 升級**：新增「營養素進度條」視覺化卡片，紅/黃/藍三色呈現蛋白質/碳水/脂肪比例。
@@ -32,7 +39,7 @@
     - **AI 營養師**：整合 Gemini 2.5 Flash，實現「看圖算熱量」。
     - **雙圖比對**：支援餐前/餐後照片比對，計算完食率。
 
-### 歷史版本
+### 歷史版本 (Legacy)
 - **v1.2**：
     - **五大指令集結**：新增「預測」與「消費比較」。
     - **萬能數值提取器**：完美支援 Notion Rollup 與 Formula。
@@ -53,7 +60,7 @@
 | **指令** | **`預測`** | 蒙地卡羅模擬未來 10 年資產。 | **Giga** (大型圖表) | `DB_SNAPSHOT` |
 | **指令** | **`消費比較`** | 近 6 個月消費折線圖與最大開銷。 | **Giga** (大型圖表) | `DB_BUDGET` |
 | **視覺** | **`(傳送食物照)`** | AI 自動辨識食物、計算熱量與營養素。 | **Flex Message** (營養進度條) | `DIET_DB_ID` |
-| **RAG** | **`(自然語言提問)`** | 例：「上個月花多少？」、「台股庫存？」、「最近有吃太油嗎？」 | **Mega** (數據卡) + **Text** (AI分析) | **全資料庫聯網** |
+| **RAG** | **`(自然語言提問)`** | 例：「上個月花多少？」、「台股庫存？」、「最近有吃太油嗎？」 | **Double Flex** (儀表板 + 分析卡) | **全資料庫聯網** |
 
 ---
 
@@ -76,7 +83,7 @@
 確保 Repository 包含：
 - `app.py` (主程式)
 - `diet_helper_v1_1.py` (AI 營養師)
-- `rag_helper_v1_0.py` (RAG 逆向查詢引擎)
+- `rag_helper_v1_1.py` (RAG 逆向查詢引擎)
 - `requirements.txt`
 - `Procfile`
 
@@ -129,21 +136,11 @@ Webhook URL：`https://你的Render網址/callback`
 為了處理跨資料庫查詢（例如同時查台股+美股+匯率），程式使用了 Python 的 `ThreadPoolExecutor`。
 這讓機器人能**同時**發送多個 Notion API 請求，將原本需要 10-15 秒的查詢時間壓縮至 **2-3 秒**。
 
-### 3. 混合式 UI 回覆 (Hybrid Response)
-Flex Message 雖然美觀但有長度限制。v3.0 採用混合策略：
-- **Flex Message**: 顯示 `title`, `main_stat` (總金額/總熱量), `details` (前 5 大項目)。根據領域自動切換主題色（紅/藍/綠/橘）。
-- **Text Message**: 緊隨其後發送 AI 的詳細分析建議，保留了 LLM 的深度推理價值。
+### 3. 雙重 Flex Message (Double Flex Strategy)
+Flex Message 雖然美觀但有長度與排版限制。`rag_helper v1.1` 採用「雙卡策略」：
+- **Summary Flex**: 數據儀表板，顯示總金額、核心數據與前 5 大項目 (自動縮放字體、主題變色)。
+- **Analysis Flex**: 深度解析卡，將 AI 生成的長篇建議拆解為條列式重點，提供更佳的閱讀體驗。
 
-### 4. 額度熔斷保護
-針對 Gemini API 的 Rate Limit (`429 Quota Exceeded`)，系統在 `ask_gemini` 與 `analyze_image` 層級都加入了攔截器。一旦偵測到額度用罄，會即時回傳友善提示（「💸 今日 TOKEN 已用罄」），確保機器人不會因報錯而停止運作。
-
-### 5. AI 營養師進化 (Diet Helper v1.1)
-- **視覺化回饋**：不再只是文字，現在會回傳一張包含熱量環狀圖與三大營養素進度條的 Flex Message。
-- **精準數據寫入**：優化寫入 Notion 的邏輯，確保時間戳記為台灣時間，並自動計算每日目標百分比 (基於 2300kcal/100p/280c/75f)。
-
----
-
-## ⚠️ 注意事項
-- **Render 休眠**：免費版 15 分鐘無人使用會休眠，喚醒時第一則訊息可能延遲。
-- **Gemini Quota**：Gemini 2.5 Flash 每日約 20 次限制，若用量大建議申請多組 API Key 或切換至 Lite 模型。
-- **Notion 權限**：新增資料庫 ID 後，務必記得在 Notion 頁面將該資料庫 **Share** 給 Integration Robot。
+### 4. 額度熔斷與記憶體保護
+- **Quota Protection**: 針對 Gemini API 的 Rate Limit (`429 Quota Exceeded`) 加入攔截器，額度用罄時優雅降級提醒。
+- **Memory Protection**: 針對大量資料查詢 (如 200 筆流水帳)，在送進 LLM 前進行 Context 截斷 (60,000 字元) 與 Payload 瘦身，防止 Render 免費版 (512MB RAM) 崩潰。
