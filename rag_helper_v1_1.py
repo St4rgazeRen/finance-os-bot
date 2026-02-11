@@ -65,7 +65,7 @@ def ask_gemini_json(prompt):
     
     try:
         # Timeout 設為 90 秒，配合大量資料處理
-        r = requests.post(url, headers=headers, json=data, verify=False, timeout=90)
+        r = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
         if r.status_code == 200:
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
@@ -355,4 +355,5 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
         # 一次發送兩張卡片
         line_bot_api.reply_message(reply_token, [flex1_msg, flex2_msg])
     else:
+
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗 (請檢查 Render Logs)。"))
