@@ -24,7 +24,7 @@
     - **萬能數值提取器**：完美支援 Notion Rollup 與 Formula。
     - **UI 優化**：實作雙層輪播 (Split Carousel)。
 - **v1.0**：核心功能上線，支援基礎資產查詢。
-  
+
 ### `rag_helper.py` (RAG Engine)
 - **v1.1 (Update)**：
     - **雙重 Flex Message (Double Flex)**：將原本的「文字分析」全面升級為第二張 Flex Card，提供一致且美觀的閱讀體驗。
@@ -43,6 +43,8 @@
 - **v1.0**：
     - **AI 營養師**：整合 Gemini 2.5 Flash，實現「看圖算熱量」。
     - **雙圖比對**：支援餐前/餐後照片比對，計算完食率。
+
+---
 
 ## ✨ 機器人功能 (Bot Features)
 
