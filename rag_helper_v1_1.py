@@ -66,7 +66,7 @@ def ask_gemini_json(prompt):
     
     try:
         # Timeout 設為 60 秒 (確保比 Gunicorn 短)
-        r = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
+        r = requests.post(url, headers=headers, json=data, verify=False, timeout=80)
         if r.status_code == 200:
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
@@ -145,7 +145,7 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
-    limit = 200 if (date_filter and date_filter.get("start")) else 30
+    limit = 150 if (date_filter and date_filter.get("start")) else 40
     payload = {"page_size": limit}
     
     if date_filter and date_filter.get("start"):
@@ -372,3 +372,4 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
         reply_line_message(reply_token, [flex1_msg, flex2_msg])
     else:
         reply_line_message(reply_token, [TextSendMessage(text="⚠️ AI 生成回應失敗。")])
+
