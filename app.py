@@ -10,7 +10,7 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, ImageMessage, FlexSendMessage, TextSendMessage
 
 # 匯入飲食小幫手模組
-from diet_helper_v1_0 import handle_diet_image
+from diet_helper_v1_1 import handle_diet_image
 # 🔥 [新增] 匯入 RAG 逆向查詢模組
 from rag_helper_v1_0 import handle_rag_query
 
@@ -316,3 +316,4 @@ def handle_image_message(event):
 
 if __name__ == "__main__":
     app.run()
+
