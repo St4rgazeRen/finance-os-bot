@@ -19,30 +19,34 @@
     - **RAG 逆向查詢大腦**：不再只能看圖，現在能「讀取」Notion 資料庫。支援投資、財務、健康、知識四大領域的自然語言問答。
     - **極速並行架構 (Concurrent Fetching)**：導入 `ThreadPoolExecutor` 多執行緒技術，同時撈取多個資料庫，查詢速度提升 500%。
     - **額度熔斷機制 (Quota Protection)**：自動偵測 Gemini API `429` 錯誤，當額度用罄時優雅降級提醒，防止系統崩潰。
-- **v1.2**：
-    - **五大指令集結**：新增「預測」與「消費比較」。
-    - **萬能數值提取器**：完美支援 Notion Rollup 與 Formula。
-    - **UI 優化**：實作雙層輪播 (Split Carousel)。
-- **v1.0**：核心功能上線，支援基礎資產查詢。
+    - **錯誤攔截系統**：針對 RAG 超時與系統錯誤增加 Try-Except 攔截，並以 Flex Message 回報錯誤原因，避免已讀不回。
 
 ### `rag_helper.py` (RAG Engine)
 - **v1.1 (Update)**：
     - **雙重 Flex Message (Double Flex)**：將原本的「文字分析」全面升級為第二張 Flex Card，提供一致且美觀的閱讀體驗。
     - **智能日期過濾 (Smart Date Filter)**：先進行意圖偵測鎖定日期範圍，並將 Notion 查詢上限提升至 **200 筆**，大幅提升跨月比較分析的精準度與效能。
     - **深層內文讀取 (Deep Content Fetching)**：針對知識庫 (Knowledge) 領域，自動讀取頁面內的文字區塊 (Blocks)，不再僅限於標題搜尋。
-    - **UI 自適應優化**：修復標題被截斷問題 (Wrap Text) 與大數字顯示 (Shrink-to-Fit)。
+    - **SSL 驗證繞過**：解決 Render 環境下 LINE SDK 與 requests 的 SSL 憑證衝突問題，確保回應不中斷。
     - **效能保護**：實作 Context 截斷機制 (60,000 字元) 與 JSON Payload 瘦身，防止 Render 記憶體溢出。
 
 ### `diet_helper.py` (AI Nutritionist)
 - **v1.1 (Update)**：
-    - **時區校正 (Timezone Fix)**：全面採用台灣時間 (UTC+8)，解決跨日與餐別判斷錯誤。
+    - **單圖/完食模式 (Single Image Mode)**：新增 Quick Reply 按鈕，支援「完食」指令，無需拍攝餐後照即可直接以 100% 完食率進行分析。
+    - **數值欄位整合 (Numeric Fields)**：將 AI 分析出的熱量、蛋白質、碳水、脂肪數值精確寫入 Notion 的 Number 欄位，便於後續統計。
     - **Flex Message 升級**：新增「營養素進度條」視覺化卡片，紅/黃/藍三色呈現蛋白質/碳水/脂肪比例。
+    - **時區校正 (Timezone Fix)**：全面採用台灣時間 (UTC+8)，解決跨日與餐別判斷錯誤。
     - **Notion 寫入優化**：自動將識別出的食物名稱填入標題，並在 Callout區塊 顯示詳細數值與百分比。
-    - **Prompt 精確控制**：限制 AI 建議字數 (30-50字)，確保手機閱讀體驗最佳化。
     - **穩定性提升**：強制關閉 SSL 驗證以適應各種網路環境。
 - **v1.0**：
     - **AI 營養師**：整合 Gemini 2.5 Flash，實現「看圖算熱量」。
     - **雙圖比對**：支援餐前/餐後照片比對，計算完食率。
+
+### 歷史版本 (Legacy)
+- **v1.2**：
+    - **五大指令集結**：新增「預測」與「消費比較」。
+    - **萬能數值提取器**：完美支援 Notion Rollup 與 Formula。
+    - **UI 優化**：實作雙層輪播 (Split Carousel)。
+- **v1.0**：核心功能上線，支援基礎資產查詢。
 
 ---
 
@@ -142,3 +146,8 @@ Flex Message 雖然美觀但有長度與排版限制。`rag_helper v1.1` 採用�
 ### 4. 額度熔斷與記憶體保護
 - **Quota Protection**: 針對 Gemini API 的 Rate Limit (`429 Quota Exceeded`) 加入攔截器，額度用罄時優雅降級提醒。
 - **Memory Protection**: 針對大量資料查詢 (如 200 筆流水帳)，在送進 LLM 前進行 Context 截斷 (60,000 字元) 與 Payload 瘦身，防止 Render 免費版 (512MB RAM) 崩潰。
+
+### 5. AI 營養師進化 (Diet Helper v1.1)
+- **視覺化回饋**：不再只是文字，現在會回傳一張包含熱量環狀圖與三大營養素進度條的 Flex Message。
+- **精準數據寫入**：優化寫入 Notion 的邏輯，將熱量、蛋白質等數值精確寫入 Number 欄位，方便後續統計分析。
+- **單圖/雙圖模式**：支援「餐前+餐後」比對計算完食率，也支援「單圖+完食」快速結算模式。
