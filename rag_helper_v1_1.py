@@ -89,18 +89,35 @@ def ask_gemini_json(prompt):
 # --- 意圖與日期分析 ---
 def analyze_query_intent(user_query):
     now_str = datetime.now().strftime("%Y-%m-%d")
+    
+    # 🔥 修改重點：明確定義 Investment 與 Finance 的邊界
     prompt = f"""
-    今天是 {now_str}。使用者問："{user_query}"
+    Current Date: {now_str}
+    User Query: "{user_query}"
     
-    請做兩件事：
-    1. 判斷領域 (INVESTMENT, FINANCE, HEALTH, KNOWLEDGE, OTHER)。
-    2. 解析時間範圍 start_date 和 end_date (YYYY-MM-DD)。
-       - 若無特定時間，留空字串 ""。
-       - 如果是比較兩個月(如"本月跟上個月")，start_date 必須包含較早的那個月份的第一天。
+    Task: Classify intent into ONE domain and extract date range.
     
-    回傳 JSON:
+    1. **Domain Definitions** (Strictly follow these rules):
+       - **INVESTMENT**: 
+         - Keywords: Stock (台股/美股), Crypto (BTC/ETH/加密貨幣), Gold (黃金), Net Worth (資產), Profit/Loss (損益), Portfolio (庫存).
+         - Focus: Market value, asset performance, holdings. (查詢「資產現況」)
+       
+       - **FINANCE**: 
+         - Keywords: Spending (花費/消費), Budget (預算), Transactions (流水帳), Income (收入/薪水), Mortgage (房貸), Bills.
+         - Focus: Daily cash flow, expense tracking, accounting. (查詢「日常收支」)
+       
+       - **HEALTH**: Diet, calories, protein, nutrition.
+       - **KNOWLEDGE**: Notes, literature, permanent notes.
+       - **OTHER**: Casual chat or irrelevant.
+
+    2. **Date Extraction**:
+       - Extract start_date and end_date (YYYY-MM-DD).
+       - If no specific time, return empty string "".
+       - For comparisons (e.g., "vs last month"), start_date must cover the earlier period.
+    
+    Return JSON only:
     {{
-        "domain": "FINANCE",
+        "domain": "INVESTMENT",
         "date_filter": {{ "start": "2026-01-01", "end": "2026-02-11" }} 
     }}
     """
