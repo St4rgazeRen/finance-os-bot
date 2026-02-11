@@ -8,12 +8,14 @@ import urllib3
 from datetime import datetime
 from linebot.models import TextSendMessage, FlexSendMessage
 
-# --- 關閉 SSL 警告 (配合你的本地測試設定) ---
+# --- 關閉 SSL 警告 ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 環境變數 ---
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# 🔥 新增：為了繞過 SDK 直接發送請求，需要讀取這個 Token
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -39,7 +41,7 @@ DOMAIN_MAP = {
     "KNOWLEDGE": GLOBAL_DBS
 }
 
-# 流水帳資料庫中的日期欄位名稱 (請確認 Notion 中是否為此名稱)
+# 流水帳資料庫中的日期欄位名稱
 FINANCE_DATE_PROP = "日期" 
 
 # 使用的模型
@@ -50,7 +52,6 @@ def ask_gemini_json(prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
-    # 關閉安全過濾，避免財務數據被擋
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -64,17 +65,15 @@ def ask_gemini_json(prompt):
     }
     
     try:
-        # Timeout 設為 90 秒，配合大量資料處理
+        # Timeout 設為 60 秒 (確保比 Gunicorn 短)
         r = requests.post(url, headers=headers, json=data, verify=False, timeout=60)
         if r.status_code == 200:
             try:
                 raw = r.json()['candidates'][0]['content']['parts'][0]['text']
-                # Regex 清洗 JSON
                 match = re.search(r'\{.*\}', raw, re.DOTALL)
                 if match:
                     return json.loads(match.group(0))
                 else:
-                    # 嘗試抓取 list [...]
                     match_list = re.search(r'\[.*\]', raw, re.DOTALL)
                     return json.loads(match_list.group(0)) if match_list else None
             except Exception as e:
@@ -84,6 +83,8 @@ def ask_gemini_json(prompt):
             print(f"❌ Gemini API Error ({r.status_code}): {r.text}")
     except Exception as e:
         print(f"❌ Request Failed: {e}")
+        # 這裡拋出異常，讓 app.py 的 try-except 抓到並發送錯誤訊息
+        raise e 
     return None
 
 # --- 意圖與日期分析 ---
@@ -125,7 +126,6 @@ def extract_notion_value(prop):
     return None
 
 def fetch_page_content(page_id):
-    """讀取 Page 內文 (針對知識庫)"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=30"
     try:
         r = requests.get(url, headers=NOTION_HEADERS, verify=False)
@@ -145,23 +145,17 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
-    # 🔥 策略：如果有日期過濾，上限提升到 200 筆；否則 30 筆
     limit = 200 if (date_filter and date_filter.get("start")) else 30
-    
     payload = {"page_size": limit}
     
-    # 🔥 智能日期過濾
     if date_filter and date_filter.get("start"):
         date_prop = FINANCE_DATE_PROP if domain == "FINANCE" else None 
-        
         filter_condition = {
             "and": [{"property": date_prop, "date": {"on_or_after": date_filter["start"]}}]
         }
-        
         if date_filter.get("end"):
             filter_condition["and"].append({"property": date_prop, "date": {"on_or_before": date_filter["end"]}})
 
-        # 針對非屬性日期的處理 (如 created_time)
         if not date_prop:
              payload["filter"] = {
                  "timestamp": "created_time", 
@@ -170,7 +164,6 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
         else:
             payload["filter"] = filter_condition
 
-    # 排序：最新的在前面
     if domain in ["FINANCE", "HEALTH", "INVESTMENT"]:
         payload["sorts"] = [{"timestamp": "created_time", "direction": "descending"}]
 
@@ -178,8 +171,6 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
         r = requests.post(f"https://api.notion.com/v1/databases/{db_id}/query", headers=NOTION_HEADERS, json=payload, verify=False)
         data = r.json()
         results = []
-        
-        # 決定是否要讀取內文 (只針對 KNOWLEDGE)
         fetch_content_flag = (domain == "KNOWLEDGE")
 
         for page in data.get("results", []):
@@ -190,12 +181,11 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
                 val = extract_notion_value(v)
                 if val is not None and val != "": simple[k] = val
             
-            # 🔥 額外抓內文
             if fetch_content_flag:
                 content = fetch_page_content(page["id"])
                 if content:
-                    simple["content_body"] = content[:500] # 截斷以免 Context 爆炸
-                del simple["id"] # 用完就丟
+                    simple["content_body"] = content[:500]
+                del simple["id"]
             
             results.append(simple)
         return results
@@ -206,7 +196,6 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
 # --- RAG 回應生成 ---
 def generate_rag_response(user_query, domain, raw_data):
     context = json.dumps(raw_data, ensure_ascii=False, indent=2)
-    # 🔥 限制 Context 長度為 60000 字元，防止 Memory Error
     if len(context) > 60000: context = context[:60000] + "...(略)"
 
     prompt = f"""
@@ -227,9 +216,7 @@ def generate_rag_response(user_query, domain, raw_data):
     return ask_gemini_json(prompt)
 
 # --- Flex Message 建構 ---
-
 def create_summary_flex(domain, data):
-    """第一張卡：數據儀表板"""
     colors = {
         "INVESTMENT": "#ef5350", "FINANCE": "#42a5f5", 
         "HEALTH": "#66bb6a", "KNOWLEDGE": "#ffa726"
@@ -241,7 +228,6 @@ def create_summary_flex(domain, data):
     if not isinstance(details, list): details = []
 
     for item in details[:5]: 
-        # 防呆：確保是 label/value 結構
         if isinstance(item, str): label, value = item, ""
         else: label, value = str(item.get('label', '項目')), str(item.get('value', ''))
 
@@ -260,14 +246,12 @@ def create_summary_flex(domain, data):
             "type": "box", "layout": "vertical", "backgroundColor": theme_color,
             "contents": [
                 {"type": "text", "text": f"{domain} INTELLIGENCE", "color": "#ffffff", "weight": "bold", "size": "xxs"},
-                # 🔥 優化：標題自動換行
                 {"type": "text", "text": str(data.get('title', '查詢結果')), "weight": "bold", "size": "xl", "color": "#ffffff", "wrap": True}
             ]
         },
         "body": {
             "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
             "contents": [
-                # 🔥 優化：核心數據縮小適應
                 *([{"type": "text", "text": str(data['main_stat']), "size": "4xl", "weight": "bold", "color": theme_color, "align": "center", "margin": "md", "adjustMode": "shrink-to-fit"}] if data.get('main_stat') else []),
                 {"type": "separator", "margin": "lg", "color": "#333333"},
                 {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": detail_boxes}
@@ -276,8 +260,6 @@ def create_summary_flex(domain, data):
     }
 
 def create_analysis_flex(analysis_data):
-    """第二張卡：詳細分析"""
-    # 防呆：處理字串回傳
     if isinstance(analysis_data, str): analysis_data = [{"title": "分析結果", "content": analysis_data}]
     elif not isinstance(analysis_data, list): analysis_data = [{"title": "提示", "content": "無詳細分析資料"}]
 
@@ -310,6 +292,40 @@ def create_analysis_flex(analysis_data):
         }
     }
 
+# 🔥 新增：使用 requests 直接發送 LINE 訊息 (繞過 SDK 的 SSL 驗證)
+def reply_line_message(reply_token, messages):
+    url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+    
+    # 將 FlexSendMessage 物件轉為 dict
+    msg_list = []
+    for msg in messages:
+        if isinstance(msg, FlexSendMessage):
+            msg_list.append({
+                "type": "flex",
+                "altText": msg.alt_text,
+                "contents": msg.contents
+            })
+        elif isinstance(msg, TextSendMessage):
+            msg_list.append({
+                "type": "text",
+                "text": msg.text
+            })
+            
+    payload = {
+        "replyToken": reply_token,
+        "messages": msg_list
+    }
+    
+    try:
+        # 🔥 重點：verify=False
+        requests.post(url, headers=headers, json=payload, verify=False, timeout=10)
+    except Exception as e:
+        print(f"❌ LINE Reply Failed: {e}")
+
 # --- 主入口函式 ---
 def handle_rag_query(user_query, reply_token, line_bot_api):
     # 1. 意圖分析
@@ -318,7 +334,8 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
     date_filter = intent.get("date_filter")
     
     if domain == "OTHER":
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="🤖 請輸入投資、記帳、健康或筆記相關問題。"))
+        # 改用 requests 發送
+        reply_line_message(reply_token, [TextSendMessage(text="🤖 請輸入投資、記帳、健康或筆記相關問題。")])
         return
 
     # 2. 決定查詢目標
@@ -327,7 +344,6 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
     
     # 3. 並行撈取資料
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        # 傳入 domain 和 date_filter
         future_to_db = {executor.submit(fetch_notion_data, db, domain, date_filter): db for db in target_dbs}
         for future in concurrent.futures.as_completed(future_to_db):
             db_name = future_to_db[future]
@@ -335,7 +351,7 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
             if res: raw_data[db_name] = res
 
     if not raw_data:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ 在 {domain} 領域查無資料 (日期範圍可能無數據)。"))
+        reply_line_message(reply_token, [TextSendMessage(text=f"⚠️ 在 {domain} 領域查無資料 (日期範圍可能無數據)。")])
         return
 
     # 4. 生成 AI 回應
@@ -352,8 +368,7 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
         flex2_content = create_analysis_flex(analysis_data)
         flex2_msg = FlexSendMessage(alt_text=f"{domain} 詳細分析", contents=flex2_content)
         
-        # 一次發送兩張卡片
-        line_bot_api.reply_message(reply_token, [flex1_msg, flex2_msg])
+        # 🔥 改用 requests 發送
+        reply_line_message(reply_token, [flex1_msg, flex2_msg])
     else:
-
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ AI 生成回應失敗 (請檢查 Render Logs)。"))
+        reply_line_message(reply_token, [TextSendMessage(text="⚠️ AI 生成回應失敗。")])
