@@ -14,7 +14,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # --- 環境變數 ---
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-# 🔥 新增：為了繞過 SDK 直接發送請求，需要讀取這個 Token
+# 🔥 為了繞過 SDK 直接發送請求，需要讀取這個 Token
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
 NOTION_HEADERS = {
@@ -65,7 +65,7 @@ def ask_gemini_json(prompt):
     }
     
     try:
-        # Timeout 設為 60 秒 (確保比 Gunicorn 短)
+        # Timeout 設為 80 秒
         r = requests.post(url, headers=headers, json=data, verify=False, timeout=80)
         if r.status_code == 200:
             try:
@@ -83,7 +83,6 @@ def ask_gemini_json(prompt):
             print(f"❌ Gemini API Error ({r.status_code}): {r.text}")
     except Exception as e:
         print(f"❌ Request Failed: {e}")
-        # 這裡拋出異常，讓 app.py 的 try-except 抓到並發送錯誤訊息
         raise e 
     return None
 
@@ -145,7 +144,9 @@ def fetch_notion_data(db_env_key, domain, date_filter=None):
     db_id = os.getenv(db_env_key)
     if not db_id: return []
     
-    limit = 150 if (date_filter and date_filter.get("start")) else 40
+    # 動態調整資料量 (有日期範圍撈 100 筆，無範圍撈 40 筆)
+    limit = 100 if (date_filter and date_filter.get("start")) else 40
+    
     payload = {"page_size": limit}
     
     if date_filter and date_filter.get("start"):
@@ -292,7 +293,7 @@ def create_analysis_flex(analysis_data):
         }
     }
 
-# 🔥 新增：使用 requests 直接發送 LINE 訊息 (繞過 SDK 的 SSL 驗證)
+# 🔥 使用 requests 直接發送 LINE 訊息 (繞過 SDK 的 SSL 驗證)
 def reply_line_message(reply_token, messages):
     url = "https://api.line.me/v2/bot/message/reply"
     headers = {
@@ -304,10 +305,15 @@ def reply_line_message(reply_token, messages):
     msg_list = []
     for msg in messages:
         if isinstance(msg, FlexSendMessage):
+            # 🔥 關鍵修正：將 BubbleContainer 物件轉為字典
+            content_dict = msg.contents
+            if hasattr(content_dict, 'as_json_dict'):
+                content_dict = content_dict.as_json_dict()
+
             msg_list.append({
                 "type": "flex",
                 "altText": msg.alt_text,
-                "contents": msg.contents
+                "contents": content_dict
             })
         elif isinstance(msg, TextSendMessage):
             msg_list.append({
@@ -321,7 +327,7 @@ def reply_line_message(reply_token, messages):
     }
     
     try:
-        # 🔥 重點：verify=False
+        # verify=False 繞過 SSL
         requests.post(url, headers=headers, json=payload, verify=False, timeout=10)
     except Exception as e:
         print(f"❌ LINE Reply Failed: {e}")
@@ -334,7 +340,6 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
     date_filter = intent.get("date_filter")
     
     if domain == "OTHER":
-        # 改用 requests 發送
         reply_line_message(reply_token, [TextSendMessage(text="🤖 請輸入投資、記帳、健康或筆記相關問題。")])
         return
 
@@ -368,8 +373,7 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
         flex2_content = create_analysis_flex(analysis_data)
         flex2_msg = FlexSendMessage(alt_text=f"{domain} 詳細分析", contents=flex2_content)
         
-        # 🔥 改用 requests 發送
+        # 發送
         reply_line_message(reply_token, [flex1_msg, flex2_msg])
     else:
         reply_line_message(reply_token, [TextSendMessage(text="⚠️ AI 生成回應失敗。")])
-
