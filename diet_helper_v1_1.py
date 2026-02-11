@@ -111,7 +111,6 @@ def create_diet_flex(data):
         }
     }
 
-# 🔥 修改重點：支援單圖 (img2_bytes=None)
 def analyze_with_gemini_http(img1_bytes, img2_bytes=None):
     print("🤖 正在呼叫 Gemini 2.5 Flash (HTTP)...")
     b64_img1 = base64.b64encode(img1_bytes).decode('utf-8')
@@ -160,9 +159,7 @@ def analyze_with_gemini_http(img1_bytes, img2_bytes=None):
     }
     """
     
-    # 將 Prompt 插入到最前面
     parts.insert(0, {"text": prompt_text})
-
     data = {"contents": [{"parts": parts}]}
 
     try:
@@ -184,12 +181,13 @@ def analyze_with_gemini_http(img1_bytes, img2_bytes=None):
         print(f"❌ Error: {e}")
         return None
 
+# 🔥 核心修改：寫入 Notion 數值欄位
 def save_to_notion(user_id, data):
     """寫入 Notion 資料庫"""
     now_tw = datetime.now(TW_TZ)
     meal_type = get_meal_type_tw()
     
-    # 計算百分比
+    # 計算百分比 (Callout 用)
     cal_pct = int((data['calories'] / DAILY_TARGET['calories']) * 100)
     p_pct = int((data['protein'] / DAILY_TARGET['protein']) * 100)
     c_pct = int((data['carbs'] / DAILY_TARGET['carbs']) * 100)
@@ -206,11 +204,18 @@ def save_to_notion(user_id, data):
     payload = {
         "parent": {"database_id": DIET_DB_ID},
         "properties": {
+            # 1. 既有欄位
             "餐點名稱": {"title": [{"text": {"content": data['food_name']}}]},
             "USER ID": {"rich_text": [{"text": {"content": user_id}}]},
             "餐別": {"select": {"name": meal_type}},
             "用餐時間": {"date": {"start": now_tw.isoformat()}},
             "狀態": {"status": {"name": "分析完成"}},
+            
+            # 🔥 2. 新增數值欄位 (Number)
+            "熱量": {"number": data['calories']},
+            "蛋白質": {"number": data['protein']},
+            "碳水化合物": {"number": data['carbs']},
+            "脂肪": {"number": data['fat']}
         },
         "children": [
             {
@@ -233,7 +238,6 @@ def save_to_notion(user_id, data):
     except Exception as e:
         print(f"❌ Notion 寫入失敗: {e}")
 
-# 🔥 修改重點：加入 QuickReply
 def handle_diet_image(user_id, image_content, reply_token, line_bot_api):
     """處理使用者傳送的飲食圖片"""
     now_tw = datetime.now(TW_TZ)
@@ -260,7 +264,6 @@ def handle_diet_image(user_id, image_content, reply_token, line_bot_api):
 
         perform_analysis(user_id, before_img, image_content, reply_token, line_bot_api)
 
-# 🔥 抽離出來的分析邏輯，供雙圖/單圖共用
 def perform_analysis(user_id, img1, img2, reply_token, line_bot_api):
     try:
         result = analyze_with_gemini_http(img1, img2)
@@ -280,8 +283,8 @@ def perform_analysis(user_id, img1, img2, reply_token, line_bot_api):
         print(f"❌ 系統錯誤: {e}")
         line_bot_api.push_message(user_id, TextSendMessage(text="⚠️ 系統發生錯誤"))
 
-# 🔥 新增：供 app.py 呼叫的單圖觸發函式
 def trigger_single_image_analysis(user_id, reply_token, line_bot_api):
+    """供 app.py 呼叫的單圖觸發函式"""
     if user_id in user_sessions and user_sessions[user_id].get('step') == 'waiting_after':
         print(f"🚀 用戶 {user_id} 觸發單圖分析 (完食)")
         session = user_sessions.pop(user_id)
