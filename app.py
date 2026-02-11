@@ -2,14 +2,15 @@ import os
 import json
 import requests
 import urllib3
+import traceback
 import numpy as np
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
+from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, ImageMessage, FlexSendMessage, TextSendMessage
 
-# 匯入飲食小幫手模組 (新增 trigger_single_image_analysis)
+# 匯入飲食小幫手模組
 from diet_helper_v1_1 import handle_diet_image, trigger_single_image_analysis
 # 匯入 RAG 逆向查詢模組
 from rag_helper_v1_1 import handle_rag_query
@@ -44,7 +45,42 @@ LOAN_TOTAL_PRINCIPAL = 5330000
 BTC_GOAL = 1.0
 
 # ==========================================
-# 1. 資料讀取函式 (Finance)
+# 1. 錯誤處理 Flex Message (新增)
+# ==========================================
+def send_error_flex(reply_token, error_msg):
+    """當系統發生錯誤或超時，發送這個 Flex Message"""
+    flex_content = {
+        "type": "bubble",
+        "size": "kilo",
+        "header": {
+            "type": "box", "layout": "vertical", "backgroundColor": "#ff5252",
+            "contents": [
+                {"type": "text", "text": "SYSTEM ALERT", "color": "#ffffff", "weight": "bold", "size": "xxs"},
+                {"type": "text", "text": "系統回應逾時", "weight": "bold", "size": "xl", "color": "#ffffff"}
+            ]
+        },
+        "body": {
+            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
+            "contents": [
+                {"type": "text", "text": "⚠️ 查詢資料量過大或 AI 忙碌中", "color": "#ffcc00", "size": "sm", "weight": "bold", "wrap": True},
+                {"type": "separator", "margin": "md", "color": "#555555"},
+                {"type": "box", "layout": "vertical", "margin": "md", "contents": [
+                    {"type": "text", "text": "建議嘗試以下方式：", "color": "#aaaaaa", "size": "xs", "margin": "sm"},
+                    {"type": "text", "text": "1. 縮小詢問的時間範圍 (例如：這週、今天)", "color": "#ffffff", "size": "xs", "wrap": True},
+                    {"type": "text", "text": "2. 稍後再試", "color": "#ffffff", "size": "xs", "wrap": True}
+                ]},
+                {"type": "separator", "margin": "md", "color": "#555555"},
+                {"type": "text", "text": f"Error: {str(error_msg)[:50]}...", "color": "#555555", "size": "xxs", "margin": "md", "wrap": True}
+            ]
+        }
+    }
+    try:
+        line_bot_api.reply_message(reply_token, FlexSendMessage(alt_text="系統忙碌中", contents=flex_content))
+    except Exception as e:
+        print(f"❌ 無法發送錯誤訊息: {e}")
+
+# ==========================================
+# 2. 資料讀取函式 (Finance)
 # ==========================================
 def extract_number(prop):
     if not prop: return 0
@@ -141,7 +177,7 @@ def get_budget_monthly_6m():
 
 
 # ==========================================
-# 2. 圖表生成 (POST)
+# 3. 圖表生成 (POST)
 # ==========================================
 def get_chart_url_post(config):
     config["options"]["layout"] = {"padding": {"left": 20, "right": 40, "top": 20, "bottom": 50}}
@@ -210,7 +246,7 @@ def gen_budget_chart_url(labels, datasets):
     return get_chart_url_post(config)
 
 # ==========================================
-# 3. 卡片生成
+# 4. 卡片生成
 # ==========================================
 def card_mortgage(rem):
     paid = LOAN_TOTAL_PRINCIPAL - rem; pct = (paid / LOAN_TOTAL_PRINCIPAL) * 100
@@ -232,7 +268,7 @@ def card_spending_giga(title, url, cat_name, cat_amount):
 
 
 # ==========================================
-# 4. Webhook 監聽
+# 5. Webhook 監聽
 # ==========================================
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -253,68 +289,66 @@ def home():
 def handle_message(event):
     msg_original = event.message.text.strip()
     msg_upper = msg_original.upper()
-    user_id = event.source.user_id # 取得 userID
+    user_id = event.source.user_id 
     
-    # --- 0. 先檢查是否為 "完食" 關鍵字 (觸發單圖分析) ---
-    # 如果觸發成功，就直接 return，不繼續往下做
+    # --- 0. 先檢查是否為 "完食" (觸發單圖分析) ---
     if msg_original == "完食":
         is_triggered = trigger_single_image_analysis(user_id, event.reply_token, line_bot_api)
-        if is_triggered:
-            return 
+        if is_triggered: return 
 
     # --- 1. 處理關鍵字指令 ---
-    if msg_original == "房貸":
-        rem = get_current_mortgage()
-        card = card_mortgage(rem)
-        line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="房貸", contents=card))
-    
-    elif msg_upper == "BTC":
-        hist = get_asset_history(1) 
-        if hist:
-            btc = hist["btc_holdings"][0] if hist["btc_holdings"] else 0
-            card = card_btc(btc)
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="BTC", contents=card))
-            
-    elif msg_original == "總資產":
-        hist = get_asset_history(120)
-        if hist and hist["total_assets"]:
-            url_total = gen_total_asset_url(hist)
-            card = card_assets_v1(hist, url_total)
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="總資產", contents=card))
-            
-    elif msg_original == "預測":
-        hist = get_asset_history(120)
-        if hist and hist["total_assets"]:
-            url_mc, med = gen_monte_carlo(hist["total_assets"])
-            card = card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}", "MONTE CARLO")
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="預測", contents=card))
-            
-    elif msg_original == "消費比較":
-        ml, md, top_cat, top_val = get_budget_monthly_6m()
-        if ml:
-            url_budget = gen_budget_chart_url(ml, md)
-            card = card_spending_giga("每月消費變化 (6M)", url_budget, top_cat, top_val)
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="消費比較", contents=card))
-        else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 無法取得消費數據 (請檢查 BUDGET_DB_ID)"))
+    try:
+        if msg_original == "房貸":
+            rem = get_current_mortgage()
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="房貸", contents=card_mortgage(rem)))
+        
+        elif msg_upper == "BTC":
+            hist = get_asset_history(1) 
+            if hist:
+                btc = hist["btc_holdings"][0] if hist["btc_holdings"] else 0
+                line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="BTC", contents=card_btc(btc)))
+                
+        elif msg_original == "總資產":
+            hist = get_asset_history(120)
+            if hist and hist["total_assets"]:
+                url_total = gen_total_asset_url(hist)
+                line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="總資產", contents=card_assets_v1(hist, url_total)))
+                
+        elif msg_original == "預測":
+            hist = get_asset_history(120)
+            if hist and hist["total_assets"]:
+                url_mc, med = gen_monte_carlo(hist["total_assets"])
+                line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="預測", contents=card_chart_giga("未來資產 (10Y)", url_mc, f"${med:,.0f}", "MONTE CARLO")))
+                
+        elif msg_original == "消費比較":
+            ml, md, top_cat, top_val = get_budget_monthly_6m()
+            if ml:
+                url_budget = gen_budget_chart_url(ml, md)
+                line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="消費比較", contents=card_spending_giga("每月消費變化 (6M)", url_budget, top_cat, top_val)))
+            else:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 無法取得消費數據 (請檢查 BUDGET_DB_ID)"))
 
-    # --- 2. RAG (AI 逆向查詢) ---
-    else:
-        # 設定最小長度，避免誤觸
-        if len(msg_original) > 1:
-            handle_rag_query(msg_original, event.reply_token, line_bot_api)
+        # --- 🔥 2. RAG (AI 逆向查詢) [加上了錯誤攔截] ---
+        else:
+            if len(msg_original) > 1:
+                try:
+                    handle_rag_query(msg_original, event.reply_token, line_bot_api)
+                except Exception as e:
+                    print(f"❌ RAG Error: {e}")
+                    traceback.print_exc()
+                    send_error_flex(event.reply_token, str(e))
+
+    except Exception as e:
+        print(f"❌ General Error: {e}")
+        send_error_flex(event.reply_token, "系統發生未預期錯誤")
 
 # --- 圖片訊息處理 (Diet) ---
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image_message(event):
     user_id = event.source.user_id
     msg_id = event.message.id
-    
-    # 從 LINE 伺服器下載圖片
     message_content = line_bot_api.get_message_content(msg_id)
     image_bytes = message_content.content
-    
-    # 交給飲食小幫手處理
     handle_diet_image(user_id, image_bytes, event.reply_token, line_bot_api)
 
 if __name__ == "__main__":
