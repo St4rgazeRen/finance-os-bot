@@ -235,46 +235,40 @@ def generate_rag_response(user_query, domain, raw_data):
 
 # --- Flex Message 建構 ---
 def create_summary_flex(domain, data):
-    colors = {
-        "INVESTMENT": "#ef5350", "FINANCE": "#42a5f5", 
-        "HEALTH": "#66bb6a", "KNOWLEDGE": "#ffa726"
-    }
+    colors = {"INVESTMENT": "#ef5350", "FINANCE": "#42a5f5", "HEALTH": "#66bb6a", "KNOWLEDGE": "#ffa726"}
     theme_color = colors.get(domain, "#999999")
-    
     detail_boxes = []
     details = data.get('details', [])
-    if not isinstance(details, list): details = []
-
-    for item in details[:5]: 
-        if isinstance(item, str): label, value = item, ""
-        else: label, value = str(item.get('label', '項目')), str(item.get('value', ''))
-
+    for item in details[:5]:
+        label = item.get('label', '項目') if isinstance(item, dict) else str(item)
+        value = item.get('value', '') if isinstance(item, dict) else ""
         detail_boxes.append({
-            "type": "box", "layout": "horizontal",
-            "contents": [
-                {"type": "text", "text": label, "size": "sm", "color": "#aaaaaa", "flex": 2, "wrap": True},
-                {"type": "text", "text": value, "size": "sm", "color": "#ffffff", "align": "end", "flex": 4, "wrap": True}
+            "type": "box", "layout": "horizontal", "contents": [
+                {"type": "text", "text": str(label), "size": "sm", "color": "#aaaaaa", "flex": 2, "wrap": True},
+                {"type": "text", "text": str(value), "size": "sm", "color": "#ffffff", "align": "end", "flex": 4, "wrap": True}
             ]
         })
-
     return {
-        "type": "bubble",
-        "size": "mega",
-        "header": {
-            "type": "box", "layout": "vertical", "backgroundColor": theme_color,
-            "contents": [
-                {"type": "text", "text": f"{domain} INTELLIGENCE", "color": "#ffffff", "weight": "bold", "size": "xxs"},
-                {"type": "text", "text": str(data.get('title', '查詢結果')), "weight": "bold", "size": "xl", "color": "#ffffff", "wrap": True}
-            ]
-        },
-        "body": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e",
-            "contents": [
-                *([{"type": "text", "text": str(data['main_stat']), "size": "4xl", "weight": "bold", "color": theme_color, "align": "center", "margin": "md", "adjustMode": "shrink-to-fit"}] if data.get('main_stat') else []),
-                {"type": "separator", "margin": "lg", "color": "#333333"},
-                {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": detail_boxes}
-            ]
-        }
+        "type": "bubble", "size": "mega",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": theme_color, "contents": [
+            {"type": "text", "text": f"{domain} INTELLIGENCE", "color": "#ffffff", "weight": "bold", "size": "xxs"},
+            {"type": "text", "text": str(data.get('title', '查詢結果')), "weight": "bold", "size": "xl", "color": "#ffffff", "wrap": True}
+        ]},
+        "body": {"type": "box", "layout": "vertical", "backgroundColor": "#1e1e1e", "contents": [
+            # 🔥 修改重點 1：將 size 從 4xl 調降至 3xl
+            # 🔥 修改重點 2：確保 wrap 為 True，並維持 adjustMode
+            *([{"type": "text", 
+                "text": str(data['main_stat']), 
+                "size": "3xl", 
+                "weight": "bold", 
+                "color": theme_color, 
+                "align": "center", 
+                "margin": "md", 
+                "wrap": True, 
+                "adjustMode": "shrink-to-fit"}] if data.get('main_stat') else []),
+            {"type": "separator", "margin": "lg", "color": "#333333"},
+            {"type": "box", "layout": "vertical", "margin": "lg", "spacing": "sm", "contents": detail_boxes}
+        ]}
     }
 
 def create_analysis_flex(analysis_data):
@@ -394,3 +388,4 @@ def handle_rag_query(user_query, reply_token, line_bot_api):
         reply_line_message(reply_token, [flex1_msg, flex2_msg])
     else:
         reply_line_message(reply_token, [TextSendMessage(text="⚠️ AI 生成回應失敗。")])
+
